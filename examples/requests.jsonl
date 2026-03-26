@@ -1,0 +1,6 @@
+{"id":"1","command":"ping"}
+{"id":"2","command":"get_info"}
+{"id":"3","command":"generate_key","params":{"force":true}}
+{"id":"4","command":"get_public_key"}
+{"id":"5","command":"set_config","params":{"autoMintEnabled":true,"autoMintIntervalSeconds":1800,"defaultTick":"LORA","defaultMintAmount":"10"}}
+{"id":"6","command":"prepare_mint","params":{"tick":"LORA","amount":"10","commit":false}}
