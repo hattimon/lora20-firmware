@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 
 namespace {
 
@@ -163,7 +164,7 @@ void SerialRpcServer::handleLine(const String &line) {
     sendDocument(serial_, response);
   };
 
-  auto sendSuccess = [&](auto fillResult) {
+  auto sendSuccess = [&](const std::function<void(JsonObject)> &fillResult) {
     response.clear();
     if (requestId[0] != '\0') {
       response["id"] = requestId;
