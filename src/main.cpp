@@ -16,6 +16,62 @@ unsigned long g_lastAutoMintAttemptMs = 0;
 uint32_t g_lastAutoMintIntervalSeconds = 0;
 size_t g_autoMintCursor = 0;
 std::vector<lora20::MintProfile> g_lastAutoMintProfiles;
+String g_lastAutoMintStage;
+String g_lastAutoMintError;
+unsigned long g_lastAutoMintEventAtMs = 0;
+
+String mintAmountToString(uint64_t amount) {
+  char buffer[32];
+  snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(amount));
+  return String(buffer);
+}
+
+void emitAutoMintEvent(const char *stage,
+                       const lora20::MintProfile *profile,
+                       uint32_t nonce,
+                       const String &error,
+                       size_t activeProfileCount,
+                       unsigned long nowMs,
+                       unsigned long nextAtMs,
+                       bool force) {
+  const String stageValue = stage != nullptr ? String(stage) : String("unknown");
+  const String errorValue = error;
+  if (!force &&
+      stageValue == g_lastAutoMintStage &&
+      errorValue == g_lastAutoMintError &&
+      (nowMs - g_lastAutoMintEventAtMs) < 30000UL) {
+    return;
+  }
+
+  DynamicJsonDocument event(640);
+  event["type"] = "auto_mint";
+  event["stage"] = stageValue;
+  event["enabled"] = g_state.snapshot().config.autoMintEnabled;
+  event["intervalSeconds"] = g_state.snapshot().config.autoMintIntervalSeconds;
+  event["activeProfiles"] = activeProfileCount;
+  event["cursor"] = g_autoMintCursor;
+  event["nowMs"] = nowMs;
+  event["nextAtMs"] = nextAtMs;
+  event["nextInMs"] = (nextAtMs > nowMs) ? (nextAtMs - nowMs) : 0;
+  event["nextNonce"] = g_state.snapshot().nextNonce;
+  if (profile != nullptr) {
+    event["tick"] = lora20::tickToString(profile->tick);
+    event["amount"] = mintAmountToString(profile->amount);
+  }
+  if (nonce != 0) {
+    event["nonce"] = nonce;
+  }
+  if (errorValue.length() > 0) {
+    event["error"] = errorValue;
+  }
+
+  serializeJson(event, Serial);
+  Serial.println();
+
+  g_lastAutoMintStage = stageValue;
+  g_lastAutoMintError = errorValue;
+  g_lastAutoMintEventAtMs = nowMs;
+}
 
 bool sameMintProfile(const lora20::MintProfile &left, const lora20::MintProfile &right) {
   return left.amount == right.amount && left.enabled == right.enabled && std::memcmp(left.tick, right.tick, 5) == 0;
@@ -60,10 +116,11 @@ bool autoMintProfileChanged(const lora20::DeviceSnapshot &snapshot, const std::v
 
 void armAutoMintSchedule(const lora20::DeviceSnapshot &snapshot,
                          const std::vector<lora20::MintProfile> &activeProfiles,
-                         unsigned long nowMs) {
+                         unsigned long nowMs,
+                         bool immediateFirstTick) {
   const unsigned long intervalMs = static_cast<unsigned long>(snapshot.config.autoMintIntervalSeconds) * 1000UL;
   g_autoMintArmed = true;
-  g_nextAutoMintAtMs = nowMs + intervalMs;
+  g_nextAutoMintAtMs = nowMs + (immediateFirstTick ? 1500UL : intervalMs);
   g_lastAutoMintIntervalSeconds = snapshot.config.autoMintIntervalSeconds;
   g_lastAutoMintProfiles = activeProfiles;
   if (g_autoMintCursor >= g_lastAutoMintProfiles.size()) {
@@ -86,19 +143,51 @@ void serviceAutoMint() {
   std::vector<lora20::MintProfile> activeProfiles;
 
   if (!snapshot.hasKey || !snapshot.config.autoMintEnabled || snapshot.config.autoMintIntervalSeconds == 0) {
+    if (g_autoMintArmed) {
+      emitAutoMintEvent(
+          "disabled",
+          nullptr,
+          0,
+          "auto-mint disabled or incomplete config",
+          0,
+          nowMs,
+          0,
+          true);
+    }
     resetAutoMintSchedule();
     return;
   }
 
   collectActiveAutoMintProfiles(snapshot, activeProfiles);
   if (activeProfiles.empty()) {
+    if (g_autoMintArmed) {
+      emitAutoMintEvent(
+          "no_active_profiles",
+          nullptr,
+          0,
+          "auto-mint has no enabled profiles",
+          0,
+          nowMs,
+          0,
+          true);
+    }
     resetAutoMintSchedule();
     return;
   }
 
   if (autoMintProfileChanged(snapshot, activeProfiles)) {
+    const bool immediateFirstTick = !g_autoMintArmed;
     g_autoMintCursor = 0;
-    armAutoMintSchedule(snapshot, activeProfiles, nowMs);
+    armAutoMintSchedule(snapshot, activeProfiles, nowMs, immediateFirstTick);
+    emitAutoMintEvent(
+        "armed",
+        activeProfiles.empty() ? nullptr : &activeProfiles.front(),
+        0,
+        "",
+        activeProfiles.size(),
+        nowMs,
+        g_nextAutoMintAtMs,
+        true);
     return;
   }
 
@@ -121,6 +210,15 @@ void serviceAutoMint() {
   if (!lora20::buildMintPayload(snapshot, profile.tick, profile.amount, nonce, prepared, error)) {
     g_lastAutoMintAttemptMs = nowMs;
     g_nextAutoMintAtMs = nowMs + 5000UL;
+    emitAutoMintEvent(
+        "prepare_failed",
+        &profile,
+        nonce,
+        error,
+        activeProfiles.size(),
+        nowMs,
+        g_nextAutoMintAtMs,
+        false);
     return;
   }
 
@@ -132,12 +230,30 @@ void serviceAutoMint() {
                              error)) {
     g_lastAutoMintAttemptMs = nowMs;
     g_nextAutoMintAtMs = nowMs + 5000UL;
+    emitAutoMintEvent(
+        "queue_failed",
+        &profile,
+        nonce,
+        error,
+        activeProfiles.size(),
+        nowMs,
+        g_nextAutoMintAtMs,
+        false);
     return;
   }
 
   g_lastAutoMintAttemptMs = nowMs;
   g_autoMintCursor = (g_autoMintCursor + 1) % activeProfiles.size();
-  armAutoMintSchedule(snapshot, activeProfiles, nowMs);
+  armAutoMintSchedule(snapshot, activeProfiles, nowMs, false);
+  emitAutoMintEvent(
+      "queued",
+      &profile,
+      nonce,
+      "",
+      activeProfiles.size(),
+      nowMs,
+      g_nextAutoMintAtMs,
+      true);
 }
 
 void setup() {
