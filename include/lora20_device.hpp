@@ -16,12 +16,22 @@ constexpr uint8_t kOpDeploy = 0x01;
 constexpr uint8_t kOpMint = 0x02;
 constexpr uint8_t kOpTransfer = 0x03;
 constexpr uint8_t kOpConfig = 0x10;
+constexpr size_t kMaxMintProfiles = 8;
+
+struct MintProfile {
+  char tick[5];
+  uint64_t amount = 1;
+  bool enabled = true;
+
+  MintProfile();
+};
 
 struct DeviceConfig {
   bool autoMintEnabled = false;
   uint32_t autoMintIntervalSeconds = 1800;
   char defaultTick[5];
   uint64_t defaultMintAmount = 1;
+  std::vector<MintProfile> mintProfiles;
 
   DeviceConfig();
 };
@@ -36,6 +46,25 @@ struct BackupBlob {
   String deviceId;
 };
 
+struct LoRaWanConfig {
+  bool autoDevEui = true;
+  bool adr = true;
+  bool confirmedUplink = false;
+  uint8_t appPort = 1;
+  uint8_t defaultDataRate = 3;
+  bool hasDevEui = false;
+  bool hasJoinEui = false;
+  bool hasAppKey = false;
+  std::array<uint8_t, 8> devEui{};
+  std::array<uint8_t, 8> joinEui{};
+  std::array<uint8_t, 16> appKey{};
+};
+
+struct HeltecLicenseConfig {
+  bool hasLicense = false;
+  std::array<uint8_t, 16> value{};
+};
+
 struct DeviceSnapshot {
   bool hasKey = false;
   std::array<uint8_t, 32> seed{};
@@ -44,6 +73,8 @@ struct DeviceSnapshot {
   std::array<uint8_t, 8> deviceId{};
   uint32_t nextNonce = 1;
   DeviceConfig config;
+  LoRaWanConfig loRaWan;
+  HeltecLicenseConfig heltecLicense;
 };
 
 struct PreparedPayload {
@@ -66,6 +97,8 @@ class DeviceStateStore {
   bool importBackup(const BackupBlob &backup, const String &passphrase, bool overwrite, String &error);
 
   bool updateConfig(const DeviceConfig &config, String &error);
+  bool updateLoRaWanConfig(const LoRaWanConfig &config, String &error);
+  bool updateHeltecLicense(const HeltecLicenseConfig &config, String &error);
   bool commitNonce(uint32_t usedNonce, String &error);
   bool applyCommittedConfig(const DeviceConfig &config, uint32_t usedNonce, String &error);
 
@@ -73,6 +106,8 @@ class DeviceStateStore {
   bool loadSnapshot(String &error);
   bool persistSeed(String &error);
   bool persistConfig(String &error);
+  bool persistLoRaWanConfig(String &error);
+  bool persistHeltecLicense(String &error);
   bool persistNonce(String &error);
   bool persistAll(String &error);
   bool deriveKeyMaterial(String &error);
@@ -125,4 +160,3 @@ String toHex(const std::array<uint8_t, N> &bytes) {
 }
 
 }  // namespace lora20
-

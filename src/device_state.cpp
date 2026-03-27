@@ -1,5 +1,6 @@
 #include "lora20_device.hpp"
 
+#include <ArduinoJson.h>
 #include <ed25519.h>
 #include <esp_system.h>
 #include <mbedtls/gcm.h>
@@ -22,6 +23,16 @@ constexpr const char *kAutoMintEnabledKey = "am_en";
 constexpr const char *kAutoMintIntervalKey = "am_int";
 constexpr const char *kDefaultTickKey = "df_tick";
 constexpr const char *kDefaultAmountKey = "df_amt";
+constexpr const char *kAutoMintProfilesKey = "am_prof";
+constexpr const char *kLoRaWanAutoDevEuiKey = "lw_auto";
+constexpr const char *kLoRaWanAdrKey = "lw_adr";
+constexpr const char *kLoRaWanConfirmedKey = "lw_conf";
+constexpr const char *kLoRaWanAppPortKey = "lw_port";
+constexpr const char *kLoRaWanDataRateKey = "lw_dr";
+constexpr const char *kLoRaWanDevEuiKey = "lw_deui";
+constexpr const char *kLoRaWanJoinEuiKey = "lw_jeui";
+constexpr const char *kLoRaWanAppKeyKey = "lw_appk";
+constexpr const char *kHeltecLicenseKey = "ht_lic";
 
 constexpr uint8_t kBackupVersion = 1;
 constexpr size_t kBackupSaltLength = 16;
@@ -29,6 +40,97 @@ constexpr size_t kBackupIvLength = 12;
 constexpr size_t kBackupTagLength = 16;
 constexpr size_t kBackupPlaintextLength = 58;
 constexpr uint32_t kBackupPbkdfIterations = 60000;
+
+bool isValidLoRaWanAppPort(uint32_t port) {
+  return port > 0 && port < 224;
+}
+
+bool isValidLoRaWanDataRate(uint32_t dataRate) {
+  return dataRate <= 15;
+}
+
+bool parseMintProfilesJson(const String &json, std::vector<lora20::MintProfile> &profiles, String &error) {
+  profiles.clear();
+  if (json.isEmpty()) {
+    return true;
+  }
+
+  DynamicJsonDocument document(1536);
+  const auto parseError = deserializeJson(document, json);
+  if (parseError) {
+    error = "Stored auto-mint profiles JSON is invalid";
+    return false;
+  }
+
+  JsonArrayConst array = document.as<JsonArrayConst>();
+  if (array.isNull()) {
+    error = "Stored auto-mint profiles must be a JSON array";
+    return false;
+  }
+
+  size_t index = 0;
+  for (JsonObjectConst entry : array) {
+    if (index >= lora20::kMaxMintProfiles) {
+      break;
+    }
+
+    if (!entry["tick"].is<const char *>() || entry["tick"].as<const char *>()[0] == '\0') {
+      error = "Stored auto-mint profile is missing tick";
+      return false;
+    }
+
+    lora20::MintProfile profile;
+    if (!lora20::normalizeTick(String(entry["tick"].as<const char *>()), profile.tick, error)) {
+      return false;
+    }
+
+    uint64_t amount = 0;
+    if (entry["amount"].is<const char *>()) {
+      if (!lora20::parseUint64(String(entry["amount"].as<const char *>()), amount) || amount == 0) {
+        error = "Stored auto-mint profile amount is invalid";
+        return false;
+      }
+    } else if (entry["amount"].is<uint64_t>()) {
+      amount = entry["amount"].as<uint64_t>();
+    } else if (entry["amount"].is<uint32_t>()) {
+      amount = entry["amount"].as<uint32_t>();
+    } else {
+      error = "Stored auto-mint profile amount is missing";
+      return false;
+    }
+
+    if (amount == 0) {
+      error = "Stored auto-mint profile amount must be greater than zero";
+      return false;
+    }
+
+    profile.amount = amount;
+    profile.enabled = entry["enabled"].is<bool>() ? entry["enabled"].as<bool>() : true;
+    profiles.push_back(profile);
+    index += 1;
+  }
+
+  return true;
+}
+
+bool serializeMintProfilesJson(const std::vector<lora20::MintProfile> &profiles, String &json, String &error) {
+  DynamicJsonDocument document(1536);
+  JsonArray array = document.to<JsonArray>();
+
+  for (size_t index = 0; index < profiles.size() && index < lora20::kMaxMintProfiles; ++index) {
+    JsonObject entry = array.createNestedObject();
+    entry["tick"] = lora20::tickToString(profiles[index].tick);
+    entry["amount"] = String(static_cast<unsigned long long>(profiles[index].amount));
+    entry["enabled"] = profiles[index].enabled;
+  }
+
+  if (serializeJson(document, json) == 0 && !profiles.empty()) {
+    error = "Failed to serialize auto-mint profiles";
+    return false;
+  }
+
+  return true;
+}
 
 void writeUint32BE(uint32_t value, uint8_t *target) {
   target[0] = static_cast<uint8_t>((value >> 24) & 0xFF);
@@ -178,6 +280,10 @@ bool decryptAesGcm(const std::vector<uint8_t> &ciphertext,
 
 namespace lora20 {
 
+MintProfile::MintProfile() {
+  std::memcpy(tick, "LORA", 5);
+}
+
 DeviceConfig::DeviceConfig() {
   std::memcpy(defaultTick, "LORA", 5);
 }
@@ -206,6 +312,15 @@ bool DeviceStateStore::loadSnapshot(String &error) {
 
   snapshot_.config.autoMintEnabled = prefs_.getBool(kAutoMintEnabledKey, false);
   snapshot_.config.autoMintIntervalSeconds = prefs_.getUInt(kAutoMintIntervalKey, 1800);
+  snapshot_.loRaWan.autoDevEui = prefs_.getBool(kLoRaWanAutoDevEuiKey, true);
+  snapshot_.loRaWan.adr = prefs_.getBool(kLoRaWanAdrKey, true);
+  snapshot_.loRaWan.confirmedUplink = prefs_.getBool(kLoRaWanConfirmedKey, false);
+
+  const uint32_t appPort = prefs_.getUInt(kLoRaWanAppPortKey, 1);
+  snapshot_.loRaWan.appPort = isValidLoRaWanAppPort(appPort) ? static_cast<uint8_t>(appPort) : 1;
+
+  const uint32_t dataRate = prefs_.getUInt(kLoRaWanDataRateKey, 3);
+  snapshot_.loRaWan.defaultDataRate = isValidLoRaWanDataRate(dataRate) ? static_cast<uint8_t>(dataRate) : 3;
 
   String tick = prefs_.getString(kDefaultTickKey, "LORA");
   if (!normalizeTick(tick, snapshot_.config.defaultTick, error)) {
@@ -217,6 +332,65 @@ bool DeviceStateStore::loadSnapshot(String &error) {
   uint64_t amount = 1;
   if (parseUint64(amountText, amount)) {
     snapshot_.config.defaultMintAmount = amount;
+  }
+
+  const String profilesJson = prefs_.getString(kAutoMintProfilesKey, "");
+  if (!parseMintProfilesJson(profilesJson, snapshot_.config.mintProfiles, error)) {
+    return false;
+  }
+
+  const size_t devEuiLength = prefs_.getBytesLength(kLoRaWanDevEuiKey);
+  if (devEuiLength == snapshot_.loRaWan.devEui.size()) {
+    if (prefs_.getBytes(kLoRaWanDevEuiKey, snapshot_.loRaWan.devEui.data(), snapshot_.loRaWan.devEui.size()) !=
+        snapshot_.loRaWan.devEui.size()) {
+      error = "Failed to load LoRaWAN DevEUI from NVS";
+      return false;
+    }
+    snapshot_.loRaWan.hasDevEui = true;
+  } else if (devEuiLength != 0) {
+    error = "Stored LoRaWAN DevEUI has invalid length";
+    return false;
+  }
+
+  const size_t joinEuiLength = prefs_.getBytesLength(kLoRaWanJoinEuiKey);
+  if (joinEuiLength == snapshot_.loRaWan.joinEui.size()) {
+    if (prefs_.getBytes(kLoRaWanJoinEuiKey, snapshot_.loRaWan.joinEui.data(), snapshot_.loRaWan.joinEui.size()) !=
+        snapshot_.loRaWan.joinEui.size()) {
+      error = "Failed to load LoRaWAN JoinEUI from NVS";
+      return false;
+    }
+    snapshot_.loRaWan.hasJoinEui = true;
+  } else if (joinEuiLength != 0) {
+    error = "Stored LoRaWAN JoinEUI has invalid length";
+    return false;
+  }
+
+  const size_t appKeyLength = prefs_.getBytesLength(kLoRaWanAppKeyKey);
+  if (appKeyLength == snapshot_.loRaWan.appKey.size()) {
+    if (prefs_.getBytes(kLoRaWanAppKeyKey, snapshot_.loRaWan.appKey.data(), snapshot_.loRaWan.appKey.size()) !=
+        snapshot_.loRaWan.appKey.size()) {
+      error = "Failed to load LoRaWAN AppKey from NVS";
+      return false;
+    }
+    snapshot_.loRaWan.hasAppKey = true;
+  } else if (appKeyLength != 0) {
+    error = "Stored LoRaWAN AppKey has invalid length";
+    return false;
+  }
+
+  const size_t heltecLicenseLength = prefs_.getBytesLength(kHeltecLicenseKey);
+  if (heltecLicenseLength == snapshot_.heltecLicense.value.size()) {
+    if (prefs_.getBytes(
+            kHeltecLicenseKey,
+            snapshot_.heltecLicense.value.data(),
+            snapshot_.heltecLicense.value.size()) != snapshot_.heltecLicense.value.size()) {
+      error = "Failed to load Heltec license from NVS";
+      return false;
+    }
+    snapshot_.heltecLicense.hasLicense = true;
+  } else if (heltecLicenseLength != 0) {
+    error = "Stored Heltec license has invalid length";
+    return false;
   }
 
   const size_t seedLength = prefs_.getBytesLength(kSeedKey);
@@ -404,12 +578,57 @@ bool DeviceStateStore::updateConfig(const DeviceConfig &config, String &error) {
   return persistConfig(error);
 }
 
+bool DeviceStateStore::updateLoRaWanConfig(const LoRaWanConfig &config, String &error) {
+  if (!isValidLoRaWanAppPort(config.appPort)) {
+    error = "LoRaWAN appPort must be between 1 and 223";
+    return false;
+  }
+
+  if (!isValidLoRaWanDataRate(config.defaultDataRate)) {
+    error = "LoRaWAN defaultDataRate must be between 0 and 15";
+    return false;
+  }
+
+  if (!config.autoDevEui && !config.hasDevEui) {
+    error = "LoRaWAN DevEUI is required when autoDevEui is disabled";
+    return false;
+  }
+
+  if (!config.hasJoinEui) {
+    error = "LoRaWAN JoinEUI is required";
+    return false;
+  }
+
+  if (!config.hasAppKey) {
+    error = "LoRaWAN AppKey is required";
+    return false;
+  }
+
+  snapshot_.loRaWan = config;
+  return persistLoRaWanConfig(error);
+}
+
+bool DeviceStateStore::updateHeltecLicense(const HeltecLicenseConfig &config, String &error) {
+  snapshot_.heltecLicense = config;
+  return persistHeltecLicense(error);
+}
+
 bool DeviceStateStore::commitNonce(uint32_t usedNonce, String &error) {
+  if (usedNonce != snapshot_.nextNonce) {
+    error = "Committed nonce does not match the current nextNonce";
+    return false;
+  }
+
   snapshot_.nextNonce = usedNonce + 1;
   return persistNonce(error);
 }
 
 bool DeviceStateStore::applyCommittedConfig(const DeviceConfig &config, uint32_t usedNonce, String &error) {
+  if (usedNonce != snapshot_.nextNonce) {
+    error = "Committed nonce does not match the current nextNonce";
+    return false;
+  }
+
   snapshot_.config = config;
   snapshot_.nextNonce = usedNonce + 1;
   return persistConfig(error) && persistNonce(error);
@@ -435,6 +654,10 @@ bool DeviceStateStore::persistSeed(String &error) {
 bool DeviceStateStore::persistConfig(String &error) {
   char amountBuffer[32];
   snprintf(amountBuffer, sizeof(amountBuffer), "%llu", static_cast<unsigned long long>(snapshot_.config.defaultMintAmount));
+  String profilesJson;
+  if (!serializeMintProfilesJson(snapshot_.config.mintProfiles, profilesJson, error)) {
+    return false;
+  }
 
   if (!prefs_.putBool(kAutoMintEnabledKey, snapshot_.config.autoMintEnabled)) {
     error = "Failed to persist autoMintEnabled";
@@ -457,6 +680,95 @@ bool DeviceStateStore::persistConfig(String &error) {
     return false;
   }
 
+  if (!snapshot_.config.mintProfiles.empty()) {
+    if (prefs_.putString(kAutoMintProfilesKey, profilesJson) == 0) {
+      error = "Failed to persist auto-mint profiles";
+      return false;
+    }
+  } else if (prefs_.getString(kAutoMintProfilesKey, "").length() != 0 && !prefs_.remove(kAutoMintProfilesKey)) {
+    error = "Failed to clear auto-mint profiles";
+    return false;
+  }
+
+  return true;
+}
+
+bool DeviceStateStore::persistLoRaWanConfig(String &error) {
+  if (!prefs_.putBool(kLoRaWanAutoDevEuiKey, snapshot_.loRaWan.autoDevEui)) {
+    error = "Failed to persist LoRaWAN autoDevEui";
+    return false;
+  }
+
+  if (!prefs_.putBool(kLoRaWanAdrKey, snapshot_.loRaWan.adr)) {
+    error = "Failed to persist LoRaWAN ADR";
+    return false;
+  }
+
+  if (!prefs_.putBool(kLoRaWanConfirmedKey, snapshot_.loRaWan.confirmedUplink)) {
+    error = "Failed to persist LoRaWAN confirmedUplink";
+    return false;
+  }
+
+  if (prefs_.putUInt(kLoRaWanAppPortKey, snapshot_.loRaWan.appPort) != sizeof(uint32_t)) {
+    error = "Failed to persist LoRaWAN appPort";
+    return false;
+  }
+
+  if (prefs_.putUInt(kLoRaWanDataRateKey, snapshot_.loRaWan.defaultDataRate) != sizeof(uint32_t)) {
+    error = "Failed to persist LoRaWAN defaultDataRate";
+    return false;
+  }
+
+  if (snapshot_.loRaWan.hasDevEui) {
+    if (prefs_.putBytes(kLoRaWanDevEuiKey, snapshot_.loRaWan.devEui.data(), snapshot_.loRaWan.devEui.size()) !=
+        snapshot_.loRaWan.devEui.size()) {
+      error = "Failed to persist LoRaWAN DevEUI";
+      return false;
+    }
+  } else if (prefs_.getBytesLength(kLoRaWanDevEuiKey) != 0 && !prefs_.remove(kLoRaWanDevEuiKey)) {
+    error = "Failed to clear LoRaWAN DevEUI";
+    return false;
+  }
+
+  if (snapshot_.loRaWan.hasJoinEui) {
+    if (prefs_.putBytes(kLoRaWanJoinEuiKey, snapshot_.loRaWan.joinEui.data(), snapshot_.loRaWan.joinEui.size()) !=
+        snapshot_.loRaWan.joinEui.size()) {
+      error = "Failed to persist LoRaWAN JoinEUI";
+      return false;
+    }
+  } else if (prefs_.getBytesLength(kLoRaWanJoinEuiKey) != 0 && !prefs_.remove(kLoRaWanJoinEuiKey)) {
+    error = "Failed to clear LoRaWAN JoinEUI";
+    return false;
+  }
+
+  if (snapshot_.loRaWan.hasAppKey) {
+    if (prefs_.putBytes(kLoRaWanAppKeyKey, snapshot_.loRaWan.appKey.data(), snapshot_.loRaWan.appKey.size()) !=
+        snapshot_.loRaWan.appKey.size()) {
+      error = "Failed to persist LoRaWAN AppKey";
+      return false;
+    }
+  } else if (prefs_.getBytesLength(kLoRaWanAppKeyKey) != 0 && !prefs_.remove(kLoRaWanAppKeyKey)) {
+    error = "Failed to clear LoRaWAN AppKey";
+    return false;
+  }
+
+  return true;
+}
+
+bool DeviceStateStore::persistHeltecLicense(String &error) {
+  if (snapshot_.heltecLicense.hasLicense) {
+    if (prefs_.putBytes(
+            kHeltecLicenseKey,
+            snapshot_.heltecLicense.value.data(),
+            snapshot_.heltecLicense.value.size()) != snapshot_.heltecLicense.value.size()) {
+      error = "Failed to persist Heltec license";
+      return false;
+    }
+  } else if (prefs_.getBytesLength(kHeltecLicenseKey) != 0 && !prefs_.remove(kHeltecLicenseKey)) {
+    error = "Failed to clear Heltec license";
+    return false;
+  }
+
   return true;
 }
 
@@ -470,7 +782,8 @@ bool DeviceStateStore::persistNonce(String &error) {
 }
 
 bool DeviceStateStore::persistAll(String &error) {
-  return persistSeed(error) && persistConfig(error) && persistNonce(error);
+  return persistSeed(error) && persistConfig(error) && persistLoRaWanConfig(error) &&
+         persistHeltecLicense(error) && persistNonce(error);
 }
 
 bool DeviceStateStore::deriveKeyMaterial(String &error) {
