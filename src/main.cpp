@@ -4,11 +4,17 @@
 
 #include "lora20_device.hpp"
 #include "lorawan_client.hpp"
+#include "rpc_processor.hpp"
 #include "serial_rpc.hpp"
+#include "wifi_bridge.hpp"
+#include "ble_bridge.hpp"
 
 lora20::DeviceStateStore g_state;
 lora20::LoRaWanClient g_lorawan(g_state);
-lora20::SerialRpcServer g_rpc(Serial, g_state, g_lorawan);
+lora20::RpcProcessor g_rpcProcessor(g_state, g_lorawan);
+lora20::SerialRpcServer g_rpc(Serial, g_rpcProcessor);
+lora20::WifiBridge g_wifiBridge(g_rpcProcessor);
+lora20::BleBridge g_bleBridge(g_rpcProcessor);
 bool g_ready = false;
 bool g_autoMintArmed = false;
 unsigned long g_nextAutoMintAtMs = 0;
@@ -276,6 +282,8 @@ void setup() {
   }
 
   g_rpc.begin();
+  g_wifiBridge.begin();
+  g_bleBridge.begin();
   g_ready = true;
 }
 
@@ -287,6 +295,8 @@ void loop() {
 
   g_lorawan.poll();
   g_rpc.poll();
+  g_wifiBridge.poll();
+  g_bleBridge.poll();
   serviceAutoMint();
   delay(2);
 }

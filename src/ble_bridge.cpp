@@ -1,0 +1,128 @@
+#include "ble_bridge.hpp"
+
+#include <BLE2902.h>
+
+namespace {
+
+constexpr const char *kServiceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+constexpr const char *kRxUuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+constexpr const char *kTxUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+constexpr size_t kChunkSize = 20;
+
+class BleServerCallbacks : public BLEServerCallbacks {
+ public:
+  explicit BleServerCallbacks(lora20::BleBridge &bridge) : bridge_(bridge) {}
+
+  void onConnect(BLEServer *) override {
+    bridge_.connected_ = true;
+  }
+
+  void onDisconnect(BLEServer *server) override {
+    bridge_.connected_ = false;
+    server->startAdvertising();
+  }
+
+ private:
+  lora20::BleBridge &bridge_;
+};
+
+class BleRxCallbacks : public BLECharacteristicCallbacks {
+ public:
+  explicit BleRxCallbacks(lora20::BleBridge &bridge) : bridge_(bridge) {}
+
+  void onWrite(BLECharacteristic *characteristic) override {
+    const std::string value = characteristic->getValue();
+    if (!value.empty()) {
+      bridge_.handleRxChunk(value);
+    }
+  }
+
+ private:
+  lora20::BleBridge &bridge_;
+};
+
+String buildBleName() {
+  const uint64_t chipId = ESP.getEfuseMac();
+  char suffix[9];
+  snprintf(suffix, sizeof(suffix), "%08llx", static_cast<unsigned long long>(chipId & 0xFFFFFFFFULL));
+  String name = String("LORA20-") + String(suffix).substring(4);
+  return name;
+}
+
+}  // namespace
+
+namespace lora20 {
+
+BleBridge::BleBridge(RpcProcessor &processor)
+    : processor_(processor),
+      server_(nullptr),
+      tx_(nullptr),
+      rx_(nullptr),
+      connected_(false),
+      rxBuffer_("") {}
+
+void BleBridge::begin() {
+  BLEDevice::init(buildBleName().c_str());
+  server_ = BLEDevice::createServer();
+  server_->setCallbacks(new BleServerCallbacks(*this));
+
+  BLEService *service = server_->createService(kServiceUuid);
+  tx_ = service->createCharacteristic(kTxUuid, BLECharacteristic::PROPERTY_NOTIFY);
+  tx_->addDescriptor(new BLE2902());
+
+  rx_ = service->createCharacteristic(kRxUuid, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  rx_->setCallbacks(new BleRxCallbacks(*this));
+
+  service->start();
+  BLEAdvertising *advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(kServiceUuid);
+  advertising->setScanResponse(true);
+  advertising->start();
+}
+
+void BleBridge::poll() {
+  // BLE callbacks are event-driven.
+}
+
+bool BleBridge::connected() const {
+  return connected_;
+}
+
+void BleBridge::handleRxChunk(const std::string &value) {
+  rxBuffer_ += String(value.c_str());
+
+  int newlineIndex = rxBuffer_.indexOf('\n');
+  while (newlineIndex >= 0) {
+    String line = rxBuffer_.substring(0, newlineIndex);
+    line.replace("\r", "");
+    rxBuffer_ = rxBuffer_.substring(newlineIndex + 1);
+
+    String response;
+    if (processor_.handleLine(line, response)) {
+      sendLine(response + "\n");
+    }
+
+    newlineIndex = rxBuffer_.indexOf('\n');
+  }
+}
+
+void BleBridge::sendLine(const String &line) {
+  if (!tx_) return;
+  const size_t length = line.length();
+  const uint8_t *data = reinterpret_cast<const uint8_t *>(line.c_str());
+  size_t offset = 0;
+  while (offset < length) {
+    const size_t chunk = length - offset > kChunkSize ? kChunkSize : (length - offset);
+    sendChunk(data + offset, chunk);
+    offset += chunk;
+    delay(5);
+  }
+}
+
+void BleBridge::sendChunk(const uint8_t *data, size_t length) {
+  if (!tx_) return;
+  tx_->setValue(data, length);
+  tx_->notify();
+}
+
+}  // namespace lora20
