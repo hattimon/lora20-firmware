@@ -846,6 +846,7 @@ void applyConnectivityPolicy() {
   const auto &connection = g_state.snapshot().connection;
   const unsigned long nowMs = millis();
   const unsigned long windowMs = static_cast<unsigned long>(std::max<uint16_t>(30, connection.bridgeWindowSeconds)) * 1000UL;
+  const bool wifiConfigured = std::strlen(connection.wifiSsid) > 0 || connection.wifiApFallback;
 
   const unsigned long latestActivity = std::max(
       std::max(g_rpc.lastActivityMs(), g_wifiBridge.lastActivityMs()),
@@ -868,7 +869,7 @@ void applyConnectivityPolicy() {
   switch (connection.mode) {
     case lora20::ConnectionMode::kUsb:
       enableBle = windowOpen;
-      enableWifi = windowOpen;
+      enableWifi = windowOpen && wifiConfigured;
       break;
     case lora20::ConnectionMode::kBle:
       enableBle = windowOpen || g_bleBridge.connected();
@@ -876,7 +877,7 @@ void applyConnectivityPolicy() {
       break;
     case lora20::ConnectionMode::kWifi:
       enableBle = false;
-      enableWifi = windowOpen || g_wifiBridge.isClientActive(nowMs, kLinkIdleGraceMs);
+      enableWifi = wifiConfigured && (windowOpen || g_wifiBridge.isClientActive(nowMs, kLinkIdleGraceMs));
       break;
     default:
       break;
@@ -884,7 +885,9 @@ void applyConnectivityPolicy() {
 
   g_bleBridge.setEnabled(enableBle);
   g_wifiBridge.applyConfig(connection, enableWifi);
-  WiFi.setSleep(connection.powerSaveLevel >= 2);
+  if (enableWifi) {
+    WiFi.setSleep(connection.powerSaveLevel >= 2);
+  }
 }
 
 void setup() {
@@ -951,7 +954,7 @@ void loop() {
   g_bleBridge.poll();
   g_lorawan.poll();
 
-  if (!g_timeSynced && WiFi.status() == WL_CONNECTED) {
+  if (!g_timeSynced && g_wifiBridge.modeLabel() == "sta_connected") {
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
     tzset();

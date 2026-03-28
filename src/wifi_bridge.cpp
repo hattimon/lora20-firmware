@@ -147,8 +147,11 @@ void WifiBridge::stopWifi() {
     server_.stop();
     serverStarted_ = false;
   }
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
+  const wifi_mode_t currentMode = WiFi.getMode();
+  if (currentMode != WIFI_MODE_NULL) {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+  }
   enabled_ = false;
   wantsSta_ = false;
   mode_ = Mode::kOff;
