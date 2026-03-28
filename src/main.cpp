@@ -909,7 +909,7 @@ void applyConnectivityPolicy() {
       enableWifi = false;
       break;
     case lora20::ConnectionMode::kWifi:
-      enableBle = false;
+      enableBle = true;
       enableWifi = wifiConfigured;
       break;
     default:
