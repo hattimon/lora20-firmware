@@ -33,6 +33,10 @@ constexpr const char *kLoRaWanDevEuiKey = "lw_deui";
 constexpr const char *kLoRaWanJoinEuiKey = "lw_jeui";
 constexpr const char *kLoRaWanAppKeyKey = "lw_appk";
 constexpr const char *kHeltecLicenseKey = "ht_lic";
+constexpr const char *kConnectionModeKey = "cn_mode";
+constexpr const char *kWifiSsidKey = "cn_ssid";
+constexpr const char *kWifiPassKey = "cn_pass";
+constexpr const char *kRpcTokenKey = "cn_token";
 
 constexpr uint8_t kBackupVersion = 1;
 constexpr size_t kBackupSaltLength = 16;
@@ -284,6 +288,12 @@ MintProfile::MintProfile() {
   std::memcpy(tick, "LORA", 5);
 }
 
+ConnectionConfig::ConnectionConfig() {
+  std::memset(wifiSsid, 0, sizeof(wifiSsid));
+  std::memset(wifiPassword, 0, sizeof(wifiPassword));
+  std::memset(rpcToken, 0, sizeof(rpcToken));
+}
+
 DeviceConfig::DeviceConfig() {
   std::memcpy(defaultTick, "LORA", 5);
 }
@@ -338,6 +348,21 @@ bool DeviceStateStore::loadSnapshot(String &error) {
   if (!parseMintProfilesJson(profilesJson, snapshot_.config.mintProfiles, error)) {
     return false;
   }
+
+  const uint8_t modeValue = prefs_.getUChar(kConnectionModeKey, static_cast<uint8_t>(ConnectionMode::kUsb));
+  snapshot_.connection.mode = static_cast<ConnectionMode>(modeValue);
+  if (snapshot_.connection.mode != ConnectionMode::kUsb &&
+      snapshot_.connection.mode != ConnectionMode::kBle &&
+      snapshot_.connection.mode != ConnectionMode::kWifi) {
+    snapshot_.connection.mode = ConnectionMode::kUsb;
+  }
+
+  const String wifiSsid = prefs_.getString(kWifiSsidKey, "");
+  const String wifiPass = prefs_.getString(kWifiPassKey, "");
+  const String rpcToken = prefs_.getString(kRpcTokenKey, "");
+  std::strncpy(snapshot_.connection.wifiSsid, wifiSsid.c_str(), sizeof(snapshot_.connection.wifiSsid) - 1);
+  std::strncpy(snapshot_.connection.wifiPassword, wifiPass.c_str(), sizeof(snapshot_.connection.wifiPassword) - 1);
+  std::strncpy(snapshot_.connection.rpcToken, rpcToken.c_str(), sizeof(snapshot_.connection.rpcToken) - 1);
 
   const size_t devEuiLength = prefs_.getBytesLength(kLoRaWanDevEuiKey);
   if (devEuiLength == snapshot_.loRaWan.devEui.size()) {
@@ -578,6 +603,11 @@ bool DeviceStateStore::updateConfig(const DeviceConfig &config, String &error) {
   return persistConfig(error);
 }
 
+bool DeviceStateStore::updateConnectionConfig(const ConnectionConfig &config, String &error) {
+  snapshot_.connection = config;
+  return persistConnectionConfig(error);
+}
+
 bool DeviceStateStore::updateLoRaWanConfig(const LoRaWanConfig &config, String &error) {
   if (!isValidLoRaWanAppPort(config.appPort)) {
     error = "LoRaWAN appPort must be between 1 and 223";
@@ -693,6 +723,45 @@ bool DeviceStateStore::persistConfig(String &error) {
   return true;
 }
 
+bool DeviceStateStore::persistConnectionConfig(String &error) {
+  if (!prefs_.putUChar(kConnectionModeKey, static_cast<uint8_t>(snapshot_.connection.mode))) {
+    error = "Failed to persist connection mode";
+    return false;
+  }
+
+  if (std::strlen(snapshot_.connection.wifiSsid) > 0) {
+    if (prefs_.putString(kWifiSsidKey, String(snapshot_.connection.wifiSsid)) == 0) {
+      error = "Failed to persist Wi-Fi SSID";
+      return false;
+    }
+  } else if (prefs_.getString(kWifiSsidKey, "").length() != 0 && !prefs_.remove(kWifiSsidKey)) {
+    error = "Failed to clear Wi-Fi SSID";
+    return false;
+  }
+
+  if (std::strlen(snapshot_.connection.wifiPassword) > 0) {
+    if (prefs_.putString(kWifiPassKey, String(snapshot_.connection.wifiPassword)) == 0) {
+      error = "Failed to persist Wi-Fi password";
+      return false;
+    }
+  } else if (prefs_.getString(kWifiPassKey, "").length() != 0 && !prefs_.remove(kWifiPassKey)) {
+    error = "Failed to clear Wi-Fi password";
+    return false;
+  }
+
+  if (std::strlen(snapshot_.connection.rpcToken) > 0) {
+    if (prefs_.putString(kRpcTokenKey, String(snapshot_.connection.rpcToken)) == 0) {
+      error = "Failed to persist RPC token";
+      return false;
+    }
+  } else if (prefs_.getString(kRpcTokenKey, "").length() != 0 && !prefs_.remove(kRpcTokenKey)) {
+    error = "Failed to clear RPC token";
+    return false;
+  }
+
+  return true;
+}
+
 bool DeviceStateStore::persistLoRaWanConfig(String &error) {
   if (!prefs_.putBool(kLoRaWanAutoDevEuiKey, snapshot_.loRaWan.autoDevEui)) {
     error = "Failed to persist LoRaWAN autoDevEui";
@@ -782,7 +851,7 @@ bool DeviceStateStore::persistNonce(String &error) {
 }
 
 bool DeviceStateStore::persistAll(String &error) {
-  return persistSeed(error) && persistConfig(error) && persistLoRaWanConfig(error) &&
+  return persistSeed(error) && persistConfig(error) && persistConnectionConfig(error) && persistLoRaWanConfig(error) &&
          persistHeltecLicense(error) && persistNonce(error);
 }
 
@@ -826,6 +895,37 @@ bool normalizeTick(const String &input, char output[5], String &error) {
 
 String tickToString(const char tick[5]) {
   return String(tick).substring(0, 4);
+}
+
+String connectionModeToString(ConnectionMode mode) {
+  switch (mode) {
+    case ConnectionMode::kUsb:
+      return "usb";
+    case ConnectionMode::kBle:
+      return "ble";
+    case ConnectionMode::kWifi:
+      return "wifi";
+    default:
+      return "usb";
+  }
+}
+
+bool parseConnectionMode(const String &input, ConnectionMode &out) {
+  String lowered = input;
+  lowered.toLowerCase();
+  if (lowered == "usb") {
+    out = ConnectionMode::kUsb;
+    return true;
+  }
+  if (lowered == "ble" || lowered == "bluetooth") {
+    out = ConnectionMode::kBle;
+    return true;
+  }
+  if (lowered == "wifi" || lowered == "wi-fi") {
+    out = ConnectionMode::kWifi;
+    return true;
+  }
+  return false;
 }
 
 bool parseUint64(const String &text, uint64_t &value) {

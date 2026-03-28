@@ -280,6 +280,16 @@ const LoRaWanRuntimeStatus &LoRaWanClient::status() const {
   return status_;
 }
 
+bool LoRaWanClient::takeAcceptedPayload(std::vector<uint8_t> &out) {
+  if (!hasAcceptedPayload_) {
+    return false;
+  }
+  out = lastAcceptedPayload_;
+  lastAcceptedPayload_.clear();
+  hasAcceptedPayload_ = false;
+  return true;
+}
+
 void LoRaWanClient::handleAck() {
   status_.lastEvent = "downlink_ack";
 }
@@ -429,6 +439,8 @@ bool LoRaWanClient::trySendQueued(String &error) {
   status_.lastSendAccepted = true;
   status_.lastAcceptedSendMs = millis();
   status_.lastAcceptedPayloadSize = queuedPayload_.size();
+  lastAcceptedPayload_ = queuedPayload_;
+  hasAcceptedPayload_ = true;
   status_.queuedPayloadSize = 0;
   status_.queuePending = false;
   queuedPayload_.clear();

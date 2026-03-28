@@ -12,7 +12,7 @@ class RpcProcessor {
   RpcProcessor(DeviceStateStore &state, LoRaWanClient &lorawan);
 
   // Returns true when a response should be sent.
-  bool handleLine(const String &line, String &response);
+  bool handleLine(const String &line, String &response, bool requireAuth = false);
   void buildBootEvent(String &response);
 
  private:

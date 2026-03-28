@@ -51,7 +51,7 @@ void SerialRpcServer::poll() {
 
 void SerialRpcServer::handleLine(const String &line) {
   String response;
-  if (!processor_.handleLine(line, response)) {
+  if (!processor_.handleLine(line, response, false)) {
     return;
   }
   if (response.length() > 0) {

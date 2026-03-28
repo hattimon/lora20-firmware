@@ -19,7 +19,9 @@ class BleServerCallbacks : public BLEServerCallbacks {
 
   void onDisconnect(BLEServer *server) override {
     bridge_.connected_ = false;
-    server->startAdvertising();
+    if (bridge_.enabled_) {
+      server->startAdvertising();
+    }
   }
 
  private:
@@ -59,9 +61,15 @@ BleBridge::BleBridge(RpcProcessor &processor)
       tx_(nullptr),
       rx_(nullptr),
       connected_(false),
+      enabled_(false),
+      initialized_(false),
       rxBuffer_("") {}
 
 void BleBridge::begin() {
+  if (initialized_) {
+    return;
+  }
+  initialized_ = true;
   BLEDevice::init(buildBleName().c_str());
   server_ = BLEDevice::createServer();
   server_->setCallbacks(new BleServerCallbacks(*this));
@@ -77,7 +85,9 @@ void BleBridge::begin() {
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(kServiceUuid);
   advertising->setScanResponse(true);
-  advertising->start();
+  if (enabled_) {
+    advertising->start();
+  }
 }
 
 void BleBridge::poll() {
@@ -88,7 +98,34 @@ bool BleBridge::connected() const {
   return connected_;
 }
 
+void BleBridge::setEnabled(bool enabled) {
+  if (enabled_ == enabled) {
+    return;
+  }
+  enabled_ = enabled;
+  if (!initialized_ && enabled_) {
+    begin();
+  }
+  if (!initialized_) {
+    return;
+  }
+  BLEAdvertising *advertising = BLEDevice::getAdvertising();
+  if (enabled_) {
+    if (advertising) {
+      advertising->start();
+    }
+  } else {
+    if (advertising) {
+      advertising->stop();
+    }
+    connected_ = false;
+  }
+}
+
 void BleBridge::handleRxChunk(const std::string &value) {
+  if (!enabled_) {
+    return;
+  }
   rxBuffer_ += String(value.c_str());
 
   int newlineIndex = rxBuffer_.indexOf('\n');
@@ -98,7 +135,7 @@ void BleBridge::handleRxChunk(const std::string &value) {
     rxBuffer_ = rxBuffer_.substring(newlineIndex + 1);
 
     String response;
-    if (processor_.handleLine(line, response)) {
+    if (processor_.handleLine(line, response, true)) {
       sendLine(response + "\n");
     }
 

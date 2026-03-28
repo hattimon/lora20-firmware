@@ -139,6 +139,13 @@ void writeConfig(JsonObject target, const lora20::DeviceConfig &config) {
   writeProfiles(target.createNestedArray("profiles"), config.mintProfiles);
 }
 
+void writeConnectionConfig(JsonObject target, const lora20::ConnectionConfig &config) {
+  target["mode"] = lora20::connectionModeToString(config.mode);
+  target["wifiSsid"] = String(config.wifiSsid);
+  target["wifiConfigured"] = std::strlen(config.wifiSsid) > 0;
+  target["tokenSet"] = std::strlen(config.rpcToken) > 0;
+}
+
 bool readMintProfilesParam(JsonVariantConst value, std::vector<lora20::MintProfile> &profiles, String &error) {
   if (value.isNull()) {
     return true;
@@ -229,6 +236,7 @@ void writeSnapshot(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
   target["deviceId"] = snapshot.hasKey ? lora20::toHex(snapshot.deviceId) : "";
   target["publicKeyHex"] = snapshot.hasKey ? lora20::toHex(snapshot.publicKey) : "";
   target["nextNonce"] = snapshot.nextNonce;
+  writeConnectionConfig(target.createNestedObject("connection"), snapshot.connection);
   writeConfig(target.createNestedObject("config"), snapshot.config);
   writeLoRaWanConfig(target.createNestedObject("lorawan"), snapshot.loRaWan);
   target["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
@@ -315,7 +323,7 @@ void RpcProcessor::buildBootEvent(String &response) {
   writeResponse(response, boot);
 }
 
-bool RpcProcessor::handleLine(const String &line, String &response) {
+bool RpcProcessor::handleLine(const String &line, String &response, bool requireAuth) {
   response = "";
   if (line.isEmpty()) {
     return false;
@@ -375,6 +383,21 @@ bool RpcProcessor::handleLine(const String &line, String &response) {
     writeResponse(response, responseDoc);
   };
 
+  const String storedToken = String(state_.snapshot().connection.rpcToken);
+  if (requireAuth && storedToken.length() > 0) {
+    String provided;
+    if (request["auth"].is<const char *>()) {
+      provided = request["auth"].as<const char *>();
+    } else if (params["auth"].is<const char *>()) {
+      provided = params["auth"].as<const char *>();
+    }
+
+    if (provided.length() == 0 || provided != storedToken) {
+      sendError("unauthorized", "Auth token is required for this connection");
+      return true;
+    }
+  }
+
   if (strlen(command) == 0) {
     sendError("missing_command", "Request must contain command or method");
     return true;
@@ -423,6 +446,76 @@ bool RpcProcessor::handleLine(const String &line, String &response) {
   if (strcmp(command, "get_config") == 0) {
     sendSuccess([&](JsonObject result) {
       writeConfig(result, state_.snapshot().config);
+    });
+    return true;
+  }
+
+  if (strcmp(command, "get_connectivity") == 0) {
+    sendSuccess([&](JsonObject result) {
+      writeConnectionConfig(result, state_.snapshot().connection);
+    });
+    return true;
+  }
+
+  if (strcmp(command, "set_connectivity") == 0) {
+    ConnectionConfig next = state_.snapshot().connection;
+    String error;
+
+    if (params["mode"].is<const char *>()) {
+      ConnectionMode parsed;
+      if (!parseConnectionMode(String(params["mode"].as<const char *>()), parsed)) {
+        sendError("invalid_mode", "mode must be one of: usb, ble, wifi");
+        return true;
+      }
+      next.mode = parsed;
+    }
+
+    if (params["clearWifi"].is<bool>() && params["clearWifi"].as<bool>()) {
+      std::memset(next.wifiSsid, 0, sizeof(next.wifiSsid));
+      std::memset(next.wifiPassword, 0, sizeof(next.wifiPassword));
+    }
+
+    if (params["wifiSsid"].is<const char *>()) {
+      const String ssid = String(params["wifiSsid"].as<const char *>());
+      if (ssid.length() >= sizeof(next.wifiSsid)) {
+        sendError("invalid_wifi_ssid", "wifiSsid is too long");
+        return true;
+      }
+      std::memset(next.wifiSsid, 0, sizeof(next.wifiSsid));
+      std::strncpy(next.wifiSsid, ssid.c_str(), sizeof(next.wifiSsid) - 1);
+    }
+
+    if (params["wifiPassword"].is<const char *>()) {
+      const String password = String(params["wifiPassword"].as<const char *>());
+      if (password.length() >= sizeof(next.wifiPassword)) {
+        sendError("invalid_wifi_password", "wifiPassword is too long");
+        return true;
+      }
+      std::memset(next.wifiPassword, 0, sizeof(next.wifiPassword));
+      std::strncpy(next.wifiPassword, password.c_str(), sizeof(next.wifiPassword) - 1);
+    }
+
+    if (params["clearToken"].is<bool>() && params["clearToken"].as<bool>()) {
+      std::memset(next.rpcToken, 0, sizeof(next.rpcToken));
+    }
+
+    if (params["rpcToken"].is<const char *>()) {
+      const String token = String(params["rpcToken"].as<const char *>());
+      if (token.length() >= sizeof(next.rpcToken)) {
+        sendError("invalid_rpc_token", "rpcToken is too long");
+        return true;
+      }
+      std::memset(next.rpcToken, 0, sizeof(next.rpcToken));
+      std::strncpy(next.rpcToken, token.c_str(), sizeof(next.rpcToken) - 1);
+    }
+
+    if (!state_.updateConnectionConfig(next, error)) {
+      sendError("connection_persist_failed", error);
+      return true;
+    }
+
+    sendSuccess([&](JsonObject result) {
+      writeConnectionConfig(result, state_.snapshot().connection);
     });
     return true;
   }

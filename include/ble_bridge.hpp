@@ -14,8 +14,10 @@ class BleBridge {
   void begin();
   void poll();
   bool connected() const;
+  void setEnabled(bool enabled);
 
  private:
+  friend class BleServerCallbacks;
   void handleRxChunk(const std::string &value);
   void sendLine(const String &line);
   void sendChunk(const uint8_t *data, size_t length);
@@ -25,6 +27,8 @@ class BleBridge {
   BLECharacteristic *tx_;
   BLECharacteristic *rx_;
   bool connected_;
+  bool enabled_;
+  bool initialized_;
   String rxBuffer_;
 };
 

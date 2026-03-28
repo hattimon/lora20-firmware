@@ -46,6 +46,7 @@ class LoRaWanClient {
                    bool commitNonce,
                    uint32_t nonceToCommit,
                    String &error);
+  bool takeAcceptedPayload(std::vector<uint8_t> &out);
 
   const LoRaWanRuntimeStatus &status() const;
 
@@ -74,6 +75,8 @@ class LoRaWanClient {
   uint32_t nextSendAttemptMs_ = 0;
   uint8_t queuedPort_ = 1;
   std::vector<uint8_t> queuedPayload_;
+  std::vector<uint8_t> lastAcceptedPayload_;
+  bool hasAcceptedPayload_ = false;
 };
 
 }  // namespace lora20
