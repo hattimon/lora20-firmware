@@ -18,6 +18,8 @@ class BleBridge {
   void poll();
   bool connected() const;
   void setEnabled(bool enabled);
+  bool isEnabled() const;
+  unsigned long lastActivityMs() const;
 
  private:
   friend class BleServerCallbacks;
@@ -33,6 +35,7 @@ class BleBridge {
   bool connected_;
   bool enabled_;
   bool initialized_;
+  unsigned long lastActivityMs_;
   String rxBuffer_;
 };
 

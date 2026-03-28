@@ -12,6 +12,7 @@ class SerialRpcServer {
 
   void begin();
   void poll();
+  unsigned long lastActivityMs() const;
 
  private:
   void handleLine(const String &line);
@@ -20,6 +21,7 @@ class SerialRpcServer {
   Stream &serial_;
   RpcProcessor &processor_;
   String buffer_;
+  unsigned long lastActivityMs_ = 0;
 };
 
 }  // namespace lora20

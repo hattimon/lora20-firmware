@@ -50,8 +50,8 @@ void WifiBridge::poll() {
   }
 }
 
-void WifiBridge::applyConfig(const ConnectionConfig &config) {
-  const bool shouldEnable = config.mode == ConnectionMode::kWifi;
+void WifiBridge::applyConfig(const ConnectionConfig &config, bool enabled) {
+  const bool shouldEnable = enabled;
   const String ssid = String(config.wifiSsid);
   const String pass = String(config.wifiPassword);
   const bool wantsSta = ssid.length() > 0;
@@ -109,6 +109,19 @@ String WifiBridge::modeLabel() const {
 
 String WifiBridge::hostname() const {
   return hostname_;
+}
+
+bool WifiBridge::isEnabled() const {
+  return enabled_;
+}
+
+unsigned long WifiBridge::lastActivityMs() const {
+  return lastActivityMs_;
+}
+
+bool WifiBridge::isClientActive(unsigned long nowMs, unsigned long timeoutMs) const {
+  if (lastActivityMs_ == 0) return false;
+  return nowMs >= lastActivityMs_ && (nowMs - lastActivityMs_) <= timeoutMs;
 }
 
 void WifiBridge::startAp() {
@@ -199,11 +212,13 @@ void WifiBridge::sendJson(int code, const String &payload) {
 }
 
 void WifiBridge::handleOptions() {
+  lastActivityMs_ = millis();
   sendCorsHeaders();
   server_.send(204);
 }
 
 void WifiBridge::handleHealth() {
+  lastActivityMs_ = millis();
   DynamicJsonDocument response(384);
   response["status"] = "ok";
   response["service"] = "lora20-device";
@@ -219,6 +234,7 @@ void WifiBridge::handleHealth() {
 }
 
 void WifiBridge::handleRpc() {
+  lastActivityMs_ = millis();
   const String body = server_.arg("plain");
   String response;
   if (!processor_.handleLine(body, response, true)) {

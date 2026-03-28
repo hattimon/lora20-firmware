@@ -147,6 +147,9 @@ void writeConnectionConfig(JsonObject target, const lora20::ConnectionConfig &co
   target["wifiConfigured"] = std::strlen(config.wifiSsid) > 0;
   target["tokenSet"] = std::strlen(config.rpcToken) > 0;
   target["wifiApFallback"] = config.wifiApFallback;
+  target["displaySleepSeconds"] = config.displaySleepSeconds;
+  target["bridgeWindowSeconds"] = config.bridgeWindowSeconds;
+  target["powerSaveLevel"] = config.powerSaveLevel;
 }
 
 bool readMintProfilesParam(JsonVariantConst value, std::vector<lora20::MintProfile> &profiles, String &error) {
@@ -523,6 +526,33 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
 
     if (params["wifiApFallback"].is<bool>()) {
       next.wifiApFallback = params["wifiApFallback"].as<bool>();
+    }
+
+    if (!params["displaySleepSeconds"].isNull()) {
+      uint32_t value = 0;
+      if (!readUint32Param(params["displaySleepSeconds"], value) || value > 3600) {
+        sendError("invalid_display_sleep", "displaySleepSeconds must be between 0 and 3600");
+        return true;
+      }
+      next.displaySleepSeconds = static_cast<uint16_t>(value);
+    }
+
+    if (!params["bridgeWindowSeconds"].isNull()) {
+      uint32_t value = 0;
+      if (!readUint32Param(params["bridgeWindowSeconds"], value) || value < 30 || value > 3600) {
+        sendError("invalid_bridge_window", "bridgeWindowSeconds must be between 30 and 3600");
+        return true;
+      }
+      next.bridgeWindowSeconds = static_cast<uint16_t>(value);
+    }
+
+    if (!params["powerSaveLevel"].isNull()) {
+      uint32_t value = 0;
+      if (!readUint32Param(params["powerSaveLevel"], value) || value > 2) {
+        sendError("invalid_power_save_level", "powerSaveLevel must be 0, 1 or 2");
+        return true;
+      }
+      next.powerSaveLevel = static_cast<uint8_t>(value);
     }
 
     if (!state_.updateConnectionConfig(next, error)) {

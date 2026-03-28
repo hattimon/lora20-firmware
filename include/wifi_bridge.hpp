@@ -14,11 +14,14 @@ class WifiBridge {
 
   void begin();
   void poll();
-  void applyConfig(const ConnectionConfig &config);
+  void applyConfig(const ConnectionConfig &config, bool enabled);
 
   String ipAddress() const;
   String modeLabel() const;
   String hostname() const;
+  bool isEnabled() const;
+  unsigned long lastActivityMs() const;
+  bool isClientActive(unsigned long nowMs, unsigned long timeoutMs = 15000UL) const;
 
  private:
   enum class Mode {
@@ -48,6 +51,7 @@ class WifiBridge {
   bool allowApFallback_ = false;
   bool mdnsStarted_ = false;
   unsigned long connectStartedMs_ = 0;
+  unsigned long lastActivityMs_ = 0;
   Mode mode_ = Mode::kOff;
   String apSsid_;
   String hostname_;

@@ -31,10 +31,12 @@ struct DeviceEvent {
 constexpr size_t kMaxDeviceEvents = 12;
 std::vector<DeviceEvent> g_deviceEvents;
 
-constexpr uint8_t kMaxDisplayScreens = 3;
+constexpr uint8_t kMaxDisplayScreens = 4;
 constexpr unsigned long kDisplayRefreshMs = 500;
 constexpr unsigned long kQueueScrollIntervalMs = 2000;
-constexpr unsigned long kLongPressMs = 3000;
+constexpr unsigned long kLongPressMs = 2200;
+constexpr unsigned long kBridgeWindowDefaultMs = 300000UL;
+constexpr unsigned long kLinkIdleGraceMs = 30000UL;
 #ifndef LORA20_PRG_PIN
 #define LORA20_PRG_PIN 0
 #endif
@@ -65,14 +67,32 @@ constexpr unsigned long kLongPressMs = 3000;
 #define LORA20_OLED_FREQ 400000
 #endif
 
+enum class DisplayScreen : uint8_t {
+  kMintStream = 0,
+  kAutomation = 1,
+  kLastEvent = 2,
+  kConnectivity = 3
+};
+
+enum class UiMode : uint8_t {
+  kView = 0,
+  kMenu = 1
+};
+
 bool g_displayReady = false;
 bool g_displaySleeping = false;
-uint8_t g_displayScreen = 0;
+DisplayScreen g_displayScreen = DisplayScreen::kMintStream;
+UiMode g_uiMode = UiMode::kView;
+uint8_t g_menuIndex = 0;
+size_t g_profileMenuIndex = 0;
 unsigned long g_lastDisplayUpdateMs = 0;
 unsigned long g_lastQueueScrollMs = 0;
 size_t g_queueScrollIndex = 0;
 bool g_buttonDown = false;
 unsigned long g_buttonDownAtMs = 0;
+unsigned long g_lastUserInteractionMs = 0;
+unsigned long g_bridgeWindowUntilMs = 0;
+unsigned long g_lastBridgeActivityMs = 0;
 bool g_timeSynced = false;
 
 void collectActiveAutoMintProfiles(const lora20::DeviceSnapshot &snapshot, std::vector<lora20::MintProfile> &profiles);
@@ -222,8 +242,8 @@ String formatEventTime(time_t timestamp) {
   return String(buffer);
 }
 
-String formatConnectionLabel() {
-  switch (g_state.snapshot().connection.mode) {
+String connectionModeLabel(lora20::ConnectionMode mode) {
+  switch (mode) {
     case lora20::ConnectionMode::kBle:
       return "BLE";
     case lora20::ConnectionMode::kWifi:
@@ -234,9 +254,224 @@ String formatConnectionLabel() {
   }
 }
 
-void updateDisplay() {
-  if (!g_displayReady || g_displaySleeping) return;
+void pushSystemEvent(const String &label) {
+  DeviceEvent event;
+  event.label = label;
+  event.nonce = g_state.snapshot().nextNonce;
+  event.payloadSize = 0;
+  event.timestamp = time(nullptr);
+  pushDeviceEvent(event);
+}
+
+void reopenBridgeWindow() {
   const unsigned long nowMs = millis();
+  const uint16_t windowSeconds = std::max<uint16_t>(30, g_state.snapshot().connection.bridgeWindowSeconds);
+  g_lastBridgeActivityMs = nowMs;
+  g_bridgeWindowUntilMs = nowMs + static_cast<unsigned long>(windowSeconds) * 1000UL;
+}
+
+void markUserInteraction() {
+  g_lastUserInteractionMs = millis();
+}
+
+void wakeDisplay() {
+  markUserInteraction();
+  if (!g_displayReady || Heltec.display == nullptr) return;
+  if (g_displaySleeping) {
+    Heltec.display->displayOn();
+  }
+  g_displaySleeping = false;
+}
+
+uint8_t menuItemCount(DisplayScreen screen) {
+  switch (screen) {
+    case DisplayScreen::kMintStream:
+      return 3;  // Wake links, clear stream, back
+    case DisplayScreen::kAutomation:
+      return 4;  // Toggle auto-mint, select profile, toggle profile, back
+    case DisplayScreen::kLastEvent:
+      return 2;  // Refresh clock, back
+    case DisplayScreen::kConnectivity:
+    default:
+      return 5;  // Mode, AP fallback, sleep, power save, back
+  }
+}
+
+String menuItemLabel(DisplayScreen screen) {
+  const auto &snapshot = g_state.snapshot();
+  switch (screen) {
+    case DisplayScreen::kMintStream:
+      if (g_menuIndex == 0) return "Enable links 5m";
+      if (g_menuIndex == 1) return "Clear mint stream";
+      return "Back";
+    case DisplayScreen::kAutomation:
+      if (g_menuIndex == 0) {
+        return snapshot.config.autoMintEnabled ? "AutoMint: ON" : "AutoMint: OFF";
+      }
+      if (g_menuIndex == 1) {
+        if (snapshot.config.mintProfiles.empty()) return "Select profile (none)";
+        const size_t selected = g_profileMenuIndex % snapshot.config.mintProfiles.size();
+        const auto &profile = snapshot.config.mintProfiles[selected];
+        String line = "Profile: ";
+        line += lora20::tickToString(profile.tick);
+        line += profile.enabled ? " ON" : " OFF";
+        return line;
+      }
+      if (g_menuIndex == 2) {
+        return "Toggle profile";
+      }
+      return "Back";
+    case DisplayScreen::kLastEvent:
+      return g_menuIndex == 0 ? "Sync clock (NTP)" : "Back";
+    case DisplayScreen::kConnectivity:
+    default:
+      if (g_menuIndex == 0) {
+        return "Mode: " + connectionModeLabel(snapshot.connection.mode);
+      }
+      if (g_menuIndex == 1) {
+        return snapshot.connection.wifiApFallback ? "AP fallback: ON" : "AP fallback: OFF";
+      }
+      if (g_menuIndex == 2) {
+        if (snapshot.connection.displaySleepSeconds == 0) return "Sleep: OFF";
+        return "Sleep: " + String(snapshot.connection.displaySleepSeconds) + "s";
+      }
+      if (g_menuIndex == 3) {
+        return "Power save: L" + String(snapshot.connection.powerSaveLevel);
+      }
+      return "Back";
+  }
+}
+
+void executeMenuAction() {
+  auto snapshot = g_state.snapshot();
+  String error;
+
+  if (g_displayScreen == DisplayScreen::kMintStream) {
+    if (g_menuIndex == 0) {
+      reopenBridgeWindow();
+      pushSystemEvent("LINKS window extended");
+    } else if (g_menuIndex == 1) {
+      g_deviceEvents.clear();
+      pushSystemEvent("Mint stream cleared");
+    } else {
+      g_uiMode = UiMode::kView;
+    }
+    return;
+  }
+
+  if (g_displayScreen == DisplayScreen::kAutomation) {
+    auto next = snapshot.config;
+    if (g_menuIndex == 0) {
+      next.autoMintEnabled = !next.autoMintEnabled;
+      if (g_state.updateConfig(next, error)) {
+        pushSystemEvent(next.autoMintEnabled ? "AutoMint enabled" : "AutoMint disabled");
+      } else {
+        pushSystemEvent("ERR config " + error);
+      }
+      return;
+    }
+    if (g_menuIndex == 1) {
+      if (!next.mintProfiles.empty()) {
+        g_profileMenuIndex = (g_profileMenuIndex + 1) % next.mintProfiles.size();
+      }
+      return;
+    }
+    if (g_menuIndex == 2) {
+      if (!next.mintProfiles.empty()) {
+        const size_t selected = g_profileMenuIndex % next.mintProfiles.size();
+        next.mintProfiles[selected].enabled = !next.mintProfiles[selected].enabled;
+        if (g_state.updateConfig(next, error)) {
+          pushSystemEvent(String("Profile ") + lora20::tickToString(next.mintProfiles[selected].tick) +
+                          (next.mintProfiles[selected].enabled ? " enabled" : " disabled"));
+        } else {
+          pushSystemEvent("ERR profile " + error);
+        }
+      }
+      return;
+    }
+    g_uiMode = UiMode::kView;
+    return;
+  }
+
+  if (g_displayScreen == DisplayScreen::kLastEvent) {
+    if (g_menuIndex == 0) {
+      g_timeSynced = false;
+      pushSystemEvent("Clock sync requested");
+    } else {
+      g_uiMode = UiMode::kView;
+    }
+    return;
+  }
+
+  auto nextConnection = snapshot.connection;
+  if (g_menuIndex == 0) {
+    if (nextConnection.mode == lora20::ConnectionMode::kUsb) {
+      nextConnection.mode = lora20::ConnectionMode::kBle;
+    } else if (nextConnection.mode == lora20::ConnectionMode::kBle) {
+      nextConnection.mode = lora20::ConnectionMode::kWifi;
+    } else {
+      nextConnection.mode = lora20::ConnectionMode::kUsb;
+    }
+    if (g_state.updateConnectionConfig(nextConnection, error)) {
+      reopenBridgeWindow();
+      pushSystemEvent("Connection mode " + connectionModeLabel(nextConnection.mode));
+    } else {
+      pushSystemEvent("ERR connectivity " + error);
+    }
+    return;
+  }
+  if (g_menuIndex == 1) {
+    nextConnection.wifiApFallback = !nextConnection.wifiApFallback;
+    if (g_state.updateConnectionConfig(nextConnection, error)) {
+      pushSystemEvent(nextConnection.wifiApFallback ? "AP fallback enabled" : "AP fallback disabled");
+    } else {
+      pushSystemEvent("ERR fallback " + error);
+    }
+    return;
+  }
+  if (g_menuIndex == 2) {
+    const uint16_t current = nextConnection.displaySleepSeconds;
+    if (current == 0) {
+      nextConnection.displaySleepSeconds = 60;
+    } else if (current <= 60) {
+      nextConnection.displaySleepSeconds = 300;
+    } else {
+      nextConnection.displaySleepSeconds = 0;
+    }
+    if (g_state.updateConnectionConfig(nextConnection, error)) {
+      markUserInteraction();
+      pushSystemEvent(String("Sleep ") + (nextConnection.displaySleepSeconds == 0 ? "OFF" : String(nextConnection.displaySleepSeconds) + "s"));
+    } else {
+      pushSystemEvent("ERR sleep " + error);
+    }
+    return;
+  }
+  if (g_menuIndex == 3) {
+    nextConnection.powerSaveLevel = static_cast<uint8_t>((nextConnection.powerSaveLevel + 1) % 3);
+    if (g_state.updateConnectionConfig(nextConnection, error)) {
+      pushSystemEvent("Power save L" + String(nextConnection.powerSaveLevel));
+    } else {
+      pushSystemEvent("ERR power " + error);
+    }
+    return;
+  }
+  g_uiMode = UiMode::kView;
+}
+
+void updateDisplay() {
+  if (!g_displayReady || Heltec.display == nullptr) return;
+
+  const unsigned long nowMs = millis();
+  const uint16_t sleepSeconds = g_state.snapshot().connection.displaySleepSeconds;
+  if (!g_displaySleeping && sleepSeconds > 0 &&
+      nowMs > g_lastUserInteractionMs &&
+      (nowMs - g_lastUserInteractionMs) >= static_cast<unsigned long>(sleepSeconds) * 1000UL) {
+    g_displaySleeping = true;
+    Heltec.display->displayOff();
+    return;
+  }
+
+  if (g_displaySleeping) return;
   if ((nowMs - g_lastDisplayUpdateMs) < kDisplayRefreshMs) return;
   g_lastDisplayUpdateMs = nowMs;
 
@@ -244,22 +479,14 @@ void updateDisplay() {
   const auto &runtime = g_lorawan.status();
   const int battery = readBatteryPercent();
   const String clock = formatClock();
-  String wifiLine;
-  if (snapshot.connection.mode == lora20::ConnectionMode::kWifi) {
-    const String ip = g_wifiBridge.ipAddress();
-    if (ip.length() > 0) {
-      wifiLine = "WiFi: " + ip;
-    } else {
-      const String modeLabel = g_wifiBridge.modeLabel();
-      wifiLine = modeLabel == "sta_connecting" ? "WiFi: connecting" : "WiFi: offline";
-    }
-  }
+  const String wifiMode = g_wifiBridge.modeLabel();
+  const String wifiIp = g_wifiBridge.ipAddress();
 
   Heltec.display->clear();
   Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
   Heltec.display->setFont(ArialMT_Plain_10);
 
-  String topLeft = formatConnectionLabel();
+  String topLeft = connectionModeLabel(snapshot.connection.mode);
   if (battery >= 0) {
     topLeft += " ";
     topLeft += String(battery);
@@ -270,44 +497,40 @@ void updateDisplay() {
   Heltec.display->drawString(128, 0, clock);
   Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
 
-  if (g_displayScreen == 0) {
-    int y = 14;
-    if (wifiLine.length() > 0) {
-      Heltec.display->drawString(0, y, wifiLine);
-      y += 12;
-    }
-    Heltec.display->drawString(0, y, runtime.joined ? "LoRa: joined" : "LoRa: offline");
-    y += 12;
-    Heltec.display->drawString(0, y, "Last:");
-    y += 12;
-    if (!g_deviceEvents.empty()) {
-      Heltec.display->drawString(0, y, truncateText(g_deviceEvents.front().label, 20));
-      y += 12;
-      Heltec.display->drawString(0, y, "nonce " + String(g_deviceEvents.front().nonce));
+  if (g_displayScreen == DisplayScreen::kMintStream) {
+    Heltec.display->drawString(0, 14, "Mint stream");
+    if (g_deviceEvents.empty()) {
+      Heltec.display->drawString(0, 28, "No mint events");
     } else {
-      Heltec.display->drawString(0, y, "no events yet");
+      const size_t visible = std::min<size_t>(3, g_deviceEvents.size());
+      for (size_t line = 0; line < visible; ++line) {
+        const auto &evt = g_deviceEvents[line];
+        String row = truncateText(evt.label, 18);
+        if (line == 0 && evt.nonce != 0) {
+          row += " n";
+          row += String(evt.nonce);
+        }
+        Heltec.display->drawString(0, 28 + static_cast<int>(line) * 12, row);
+      }
     }
-  } else if (g_displayScreen == 1) {
-    const String autoMint = snapshot.config.autoMintEnabled ? "AutoMint ON" : "AutoMint OFF";
-    Heltec.display->drawString(0, 14, autoMint + " " + String(snapshot.config.autoMintIntervalSeconds) + "s");
+  } else if (g_displayScreen == DisplayScreen::kAutomation) {
+    Heltec.display->drawString(0, 14, snapshot.config.autoMintEnabled ? "Automation: ON" : "Automation: OFF");
+    Heltec.display->drawString(0, 26, "Every " + String(snapshot.config.autoMintIntervalSeconds) + "s");
     std::vector<lora20::MintProfile> profiles;
     collectActiveAutoMintProfiles(snapshot, profiles);
     if (profiles.empty()) {
-      Heltec.display->drawString(0, 30, "no profiles");
+      Heltec.display->drawString(0, 40, "No active profiles");
     } else {
       if ((nowMs - g_lastQueueScrollMs) > kQueueScrollIntervalMs) {
         g_queueScrollIndex = (g_queueScrollIndex + 1) % profiles.size();
         g_lastQueueScrollMs = nowMs;
       }
-      const size_t visible = 3;
-      for (size_t line = 0; line < visible; ++line) {
-        const size_t index = (g_queueScrollIndex + line) % profiles.size();
-        const auto &profile = profiles[index];
-        String row = lora20::tickToString(profile.tick) + " " + mintAmountToString(profile.amount);
-        Heltec.display->drawString(0, 28 + static_cast<int>(line) * 12, truncateText(row, 20));
-      }
+      const size_t index = g_queueScrollIndex % profiles.size();
+      const auto &profile = profiles[index];
+      Heltec.display->drawString(0, 40, truncateText("Queue: " + lora20::tickToString(profile.tick) + " " + mintAmountToString(profile.amount), 20));
+      Heltec.display->drawString(0, 52, "idx " + String(index + 1) + "/" + String(profiles.size()));
     }
-  } else {
+  } else if (g_displayScreen == DisplayScreen::kLastEvent) {
     if (!g_deviceEvents.empty()) {
       const auto &evt = g_deviceEvents.front();
       Heltec.display->drawString(0, 14, truncateText(evt.label, 20));
@@ -315,7 +538,29 @@ void updateDisplay() {
       Heltec.display->drawString(0, 40, "payload " + String(evt.payloadSize) + "B");
       Heltec.display->drawString(0, 52, formatEventTime(evt.timestamp));
     } else {
-      Heltec.display->drawString(0, 18, "no recent events");
+      Heltec.display->drawString(0, 24, "No recent events");
+      Heltec.display->drawString(0, 38, runtime.joined ? "LoRa joined" : "LoRa offline");
+    }
+  } else {
+    Heltec.display->drawString(0, 14, "Conn: " + connectionModeLabel(snapshot.connection.mode));
+    if (wifiIp.length() > 0) {
+      Heltec.display->drawString(0, 26, truncateText("IP " + wifiIp, 20));
+    } else {
+      Heltec.display->drawString(0, 26, "WiFi " + wifiMode);
+    }
+    const unsigned long remainingMs = nowMs < g_bridgeWindowUntilMs ? (g_bridgeWindowUntilMs - nowMs) : 0;
+    Heltec.display->drawString(0, 38, "Links " + String(remainingMs / 1000) + "s");
+    Heltec.display->drawString(0, 50, "PWR L" + String(snapshot.connection.powerSaveLevel));
+  }
+
+  if (g_uiMode == UiMode::kMenu) {
+    const uint8_t count = menuItemCount(g_displayScreen);
+    if (count > 0) {
+      g_menuIndex %= count;
+      Heltec.display->fillRect(0, 52, 128, 12);
+      Heltec.display->setColor(BLACK);
+      Heltec.display->drawString(2, 53, truncateText("> " + menuItemLabel(g_displayScreen), 20));
+      Heltec.display->setColor(WHITE);
     }
   }
 
@@ -334,20 +579,35 @@ void handleButton() {
   if (!pressed && g_buttonDown) {
     const unsigned long held = nowMs - g_buttonDownAtMs;
     g_buttonDown = false;
+    markUserInteraction();
+
     if (held >= kLongPressMs) {
-      g_displaySleeping = !g_displaySleeping;
       if (g_displaySleeping) {
-        Heltec.display->displayOff();
+        wakeDisplay();
+        return;
+      }
+      if (g_uiMode == UiMode::kView) {
+        g_uiMode = UiMode::kMenu;
+        g_menuIndex = 0;
       } else {
-        Heltec.display->displayOn();
+        executeMenuAction();
+      }
+      return;
+    }
+
+    if (g_displaySleeping) {
+      wakeDisplay();
+      return;
+    }
+
+    if (g_uiMode == UiMode::kMenu) {
+      const uint8_t count = menuItemCount(g_displayScreen);
+      if (count > 0) {
+        g_menuIndex = (g_menuIndex + 1) % count;
       }
     } else {
-      if (g_displaySleeping) {
-        g_displaySleeping = false;
-        Heltec.display->displayOn();
-      } else {
-        g_displayScreen = (g_displayScreen + 1) % kMaxDisplayScreens;
-      }
+      const uint8_t next = (static_cast<uint8_t>(g_displayScreen) + 1) % kMaxDisplayScreens;
+      g_displayScreen = static_cast<DisplayScreen>(next);
     }
   }
 }
@@ -582,6 +842,51 @@ void serviceAutoMint() {
       true);
 }
 
+void applyConnectivityPolicy() {
+  const auto &connection = g_state.snapshot().connection;
+  const unsigned long nowMs = millis();
+  const unsigned long windowMs = static_cast<unsigned long>(std::max<uint16_t>(30, connection.bridgeWindowSeconds)) * 1000UL;
+
+  const unsigned long latestActivity = std::max(
+      std::max(g_rpc.lastActivityMs(), g_wifiBridge.lastActivityMs()),
+      g_bleBridge.lastActivityMs());
+  if (latestActivity > g_lastBridgeActivityMs) {
+    g_lastBridgeActivityMs = latestActivity;
+    g_bridgeWindowUntilMs = latestActivity + windowMs;
+  }
+  if (g_bridgeWindowUntilMs == 0) {
+    g_bridgeWindowUntilMs = nowMs + windowMs;
+  }
+
+  bool windowOpen = nowMs < g_bridgeWindowUntilMs;
+  if (connection.powerSaveLevel == 0) {
+    windowOpen = true;
+  }
+
+  bool enableBle = false;
+  bool enableWifi = false;
+  switch (connection.mode) {
+    case lora20::ConnectionMode::kUsb:
+      enableBle = windowOpen;
+      enableWifi = windowOpen;
+      break;
+    case lora20::ConnectionMode::kBle:
+      enableBle = windowOpen || g_bleBridge.connected();
+      enableWifi = false;
+      break;
+    case lora20::ConnectionMode::kWifi:
+      enableBle = false;
+      enableWifi = windowOpen || g_wifiBridge.isClientActive(nowMs, kLinkIdleGraceMs);
+      break;
+    default:
+      break;
+  }
+
+  g_bleBridge.setEnabled(enableBle);
+  g_wifiBridge.applyConfig(connection, enableWifi);
+  WiFi.setSleep(connection.powerSaveLevel >= 2);
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -602,13 +907,22 @@ void setup() {
   }
 
   Heltec.begin(false, false, false);
-#ifdef Heltec_Screen
-  // Heltec library has a constructor mismatch for SSD1306Wire on some boards.
-  // Initialize the display explicitly with correct pins and I2C frequency.
+#if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
+  // Force explicit OLED init. On some Heltec V4 builds default constructor path does not start the screen.
   Heltec.display = new SSD1306Wire(0x3c, LORA20_OLED_FREQ, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
-  if (Heltec.display && Heltec.display->init()) {
+  if (Heltec.display != nullptr && Heltec.display->init()) {
     Heltec.display->clear();
     Heltec.display->setFont(ArialMT_Plain_10);
+    Heltec.display->displayOn();
+    Heltec.display->display();
+    g_displayReady = true;
+  }
+#else
+  if (Heltec.display != nullptr) {
+    Heltec.display->init();
+    Heltec.display->clear();
+    Heltec.display->setFont(ArialMT_Plain_10);
+    Heltec.display->displayOn();
     Heltec.display->display();
     g_displayReady = true;
   }
@@ -618,6 +932,10 @@ void setup() {
   g_rpc.begin();
   g_wifiBridge.begin();
   g_rpcProcessor.setWifiBridge(&g_wifiBridge);
+  const unsigned long startedAtMs = millis();
+  g_lastUserInteractionMs = startedAtMs;
+  g_lastBridgeActivityMs = startedAtMs;
+  g_bridgeWindowUntilMs = startedAtMs + kBridgeWindowDefaultMs;
   g_ready = true;
 }
 
@@ -627,12 +945,11 @@ void loop() {
     return;
   }
 
-  g_lorawan.poll();
-  g_bleBridge.setEnabled(g_state.snapshot().connection.mode == lora20::ConnectionMode::kBle);
-  g_wifiBridge.applyConfig(g_state.snapshot().connection);
   g_rpc.poll();
+  applyConnectivityPolicy();
   g_wifiBridge.poll();
   g_bleBridge.poll();
+  g_lorawan.poll();
 
   if (!g_timeSynced && WiFi.status() == WL_CONNECTED) {
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
@@ -653,5 +970,6 @@ void loop() {
   serviceAutoMint();
   handleButton();
   updateDisplay();
-  delay(2);
+  const uint8_t powerSaveLevel = g_state.snapshot().connection.powerSaveLevel;
+  delay(powerSaveLevel >= 2 ? 10 : 2);
 }

@@ -38,6 +38,9 @@ struct ConnectionConfig {
   char wifiPassword[65];
   char rpcToken[65];
   bool wifiApFallback = false;
+  uint16_t displaySleepSeconds = 60;
+  uint16_t bridgeWindowSeconds = 300;
+  uint8_t powerSaveLevel = 1;
 
   ConnectionConfig();
 };

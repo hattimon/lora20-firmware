@@ -50,6 +50,7 @@ void SerialRpcServer::poll() {
 }
 
 void SerialRpcServer::handleLine(const String &line) {
+  lastActivityMs_ = millis();
   String response;
   if (!processor_.handleLine(line, response, false)) {
     return;
@@ -65,6 +66,10 @@ void SerialRpcServer::sendBootEvent() {
   if (response.length() > 0) {
     serial_.println(response);
   }
+}
+
+unsigned long SerialRpcServer::lastActivityMs() const {
+  return lastActivityMs_;
 }
 
 }  // namespace lora20

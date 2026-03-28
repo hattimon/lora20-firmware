@@ -15,10 +15,12 @@ class BleServerCallbacks : public BLEServerCallbacks {
 
   void onConnect(BLEServer *) override {
     bridge_.connected_ = true;
+    bridge_.lastActivityMs_ = millis();
   }
 
   void onDisconnect(BLEServer *server) override {
     bridge_.connected_ = false;
+    bridge_.lastActivityMs_ = millis();
     if (bridge_.enabled_) {
       server->startAdvertising();
     }
@@ -35,6 +37,7 @@ class BleRxCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
     const std::string value = characteristic->getValue();
     if (!value.empty()) {
+      bridge_.lastActivityMs_ = millis();
       bridge_.handleRxChunk(value);
     }
   }
@@ -59,6 +62,7 @@ BleBridge::BleBridge(RpcProcessor &processor)
       connected_(false),
       enabled_(false),
       initialized_(false),
+      lastActivityMs_(0),
       rxBuffer_("") {}
 
 void BleBridge::begin() {
@@ -92,6 +96,14 @@ void BleBridge::poll() {
 
 bool BleBridge::connected() const {
   return connected_;
+}
+
+bool BleBridge::isEnabled() const {
+  return enabled_;
+}
+
+unsigned long BleBridge::lastActivityMs() const {
+  return lastActivityMs_;
 }
 
 void BleBridge::setEnabled(bool enabled) {

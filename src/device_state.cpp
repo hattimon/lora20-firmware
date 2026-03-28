@@ -9,6 +9,7 @@
 #include <mbedtls/sha256.h>
 
 #include <array>
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -38,6 +39,9 @@ constexpr const char *kWifiSsidKey = "cn_ssid";
 constexpr const char *kWifiPassKey = "cn_pass";
 constexpr const char *kRpcTokenKey = "cn_token";
 constexpr const char *kWifiApFallbackKey = "cn_apfb";
+constexpr const char *kDisplaySleepSecondsKey = "cn_dslp";
+constexpr const char *kBridgeWindowSecondsKey = "cn_bwin";
+constexpr const char *kPowerSaveLevelKey = "cn_pslv";
 
 constexpr uint8_t kBackupVersion = 1;
 constexpr size_t kBackupSaltLength = 16;
@@ -294,6 +298,9 @@ ConnectionConfig::ConnectionConfig() {
   std::memset(wifiPassword, 0, sizeof(wifiPassword));
   std::memset(rpcToken, 0, sizeof(rpcToken));
   wifiApFallback = false;
+  displaySleepSeconds = 60;
+  bridgeWindowSeconds = 300;
+  powerSaveLevel = 1;
 }
 
 DeviceConfig::DeviceConfig() {
@@ -363,9 +370,17 @@ bool DeviceStateStore::loadSnapshot(String &error) {
   const String wifiPass = prefs_.getString(kWifiPassKey, "");
   const String rpcToken = prefs_.getString(kRpcTokenKey, "");
   snapshot_.connection.wifiApFallback = prefs_.getBool(kWifiApFallbackKey, false);
+  const uint32_t displaySleepSeconds = prefs_.getUInt(kDisplaySleepSecondsKey, 60);
+  const uint32_t bridgeWindowSeconds = prefs_.getUInt(kBridgeWindowSecondsKey, 300);
+  const uint8_t powerSaveLevel = prefs_.getUChar(kPowerSaveLevelKey, 1);
   std::strncpy(snapshot_.connection.wifiSsid, wifiSsid.c_str(), sizeof(snapshot_.connection.wifiSsid) - 1);
   std::strncpy(snapshot_.connection.wifiPassword, wifiPass.c_str(), sizeof(snapshot_.connection.wifiPassword) - 1);
   std::strncpy(snapshot_.connection.rpcToken, rpcToken.c_str(), sizeof(snapshot_.connection.rpcToken) - 1);
+  snapshot_.connection.displaySleepSeconds =
+      static_cast<uint16_t>(std::min<uint32_t>(3600, displaySleepSeconds));
+  snapshot_.connection.bridgeWindowSeconds =
+      static_cast<uint16_t>(std::max<uint32_t>(30, std::min<uint32_t>(3600, bridgeWindowSeconds)));
+  snapshot_.connection.powerSaveLevel = powerSaveLevel <= 2 ? powerSaveLevel : 1;
 
   const size_t devEuiLength = prefs_.getBytesLength(kLoRaWanDevEuiKey);
   if (devEuiLength == snapshot_.loRaWan.devEui.size()) {
@@ -607,6 +622,21 @@ bool DeviceStateStore::updateConfig(const DeviceConfig &config, String &error) {
 }
 
 bool DeviceStateStore::updateConnectionConfig(const ConnectionConfig &config, String &error) {
+  if (config.displaySleepSeconds > 3600) {
+    error = "displaySleepSeconds must be between 0 and 3600";
+    return false;
+  }
+
+  if (config.bridgeWindowSeconds < 30 || config.bridgeWindowSeconds > 3600) {
+    error = "bridgeWindowSeconds must be between 30 and 3600";
+    return false;
+  }
+
+  if (config.powerSaveLevel > 2) {
+    error = "powerSaveLevel must be 0, 1 or 2";
+    return false;
+  }
+
   snapshot_.connection = config;
   return persistConnectionConfig(error);
 }
@@ -764,6 +794,21 @@ bool DeviceStateStore::persistConnectionConfig(String &error) {
 
   if (!prefs_.putBool(kWifiApFallbackKey, snapshot_.connection.wifiApFallback)) {
     error = "Failed to persist Wi-Fi AP fallback flag";
+    return false;
+  }
+
+  if (prefs_.putUInt(kDisplaySleepSecondsKey, snapshot_.connection.displaySleepSeconds) != sizeof(uint32_t)) {
+    error = "Failed to persist display sleep timeout";
+    return false;
+  }
+
+  if (prefs_.putUInt(kBridgeWindowSecondsKey, snapshot_.connection.bridgeWindowSeconds) != sizeof(uint32_t)) {
+    error = "Failed to persist bridge window timeout";
+    return false;
+  }
+
+  if (!prefs_.putUChar(kPowerSaveLevelKey, snapshot_.connection.powerSaveLevel)) {
+    error = "Failed to persist powerSaveLevel";
     return false;
   }
 
