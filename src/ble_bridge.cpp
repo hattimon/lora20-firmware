@@ -51,8 +51,6 @@ String buildBleName() {
   return name;
 }
 
-}  // namespace lora20
-
 BleBridge::BleBridge(RpcProcessor &processor)
     : processor_(processor),
       server_(nullptr),
