@@ -91,7 +91,10 @@ void BleBridge::begin() {
 }
 
 void BleBridge::poll() {
-  // BLE callbacks are event-driven.
+  // Keep session activity alive while a client remains connected.
+  if (enabled_ && connected_) {
+    lastActivityMs_ = millis();
+  }
 }
 
 bool BleBridge::connected() const {

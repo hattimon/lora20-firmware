@@ -901,8 +901,8 @@ void applyConnectivityPolicy() {
   bool enableWifi = false;
   switch (connection.mode) {
     case lora20::ConnectionMode::kUsb:
-      enableBle = windowOpen;
-      enableWifi = windowOpen && wifiConfigured;
+      enableBle = true;
+      enableWifi = wifiConfigured;
       break;
     case lora20::ConnectionMode::kBle:
       enableBle = true;
