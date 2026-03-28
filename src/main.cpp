@@ -61,6 +61,9 @@ constexpr unsigned long kLongPressMs = 3000;
 #ifndef LORA20_BATTERY_MAX_V
 #define LORA20_BATTERY_MAX_V 4.2f
 #endif
+#ifndef LORA20_OLED_FREQ
+#define LORA20_OLED_FREQ 400000
+#endif
 
 bool g_displayReady = false;
 bool g_displaySleeping = false;
@@ -598,13 +601,18 @@ void setup() {
     return;
   }
 
-  Heltec.begin(true, false, false);
-  if (Heltec.display) {
+  Heltec.begin(false, false, false);
+#ifdef Heltec_Screen
+  // Heltec library has a constructor mismatch for SSD1306Wire on some boards.
+  // Initialize the display explicitly with correct pins and I2C frequency.
+  Heltec.display = new SSD1306Wire(0x3c, LORA20_OLED_FREQ, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
+  if (Heltec.display && Heltec.display->init()) {
     Heltec.display->clear();
     Heltec.display->setFont(ArialMT_Plain_10);
     Heltec.display->display();
     g_displayReady = true;
   }
+#endif
   pinMode(LORA20_PRG_PIN, INPUT_PULLUP);
 
   g_rpc.begin();
