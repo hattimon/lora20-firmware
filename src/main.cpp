@@ -886,7 +886,9 @@ void applyConnectivityPolicy() {
   g_bleBridge.setEnabled(enableBle);
   g_wifiBridge.applyConfig(connection, enableWifi);
   if (enableWifi) {
-    WiFi.setSleep(connection.powerSaveLevel >= 2);
+    // ESP32-S3 requires modem sleep when WiFi and BLE are active at the same time.
+    const bool forceModemSleepForCoex = enableBle;
+    WiFi.setSleep(forceModemSleepForCoex || connection.powerSaveLevel >= 2);
   }
 }
 
