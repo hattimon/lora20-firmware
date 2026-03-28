@@ -7,6 +7,9 @@
 
 namespace lora20 {
 
+class BleServerCallbacks;
+class BleRxCallbacks;
+
 class BleBridge {
  public:
   explicit BleBridge(RpcProcessor &processor);
@@ -18,6 +21,7 @@ class BleBridge {
 
  private:
   friend class BleServerCallbacks;
+  friend class BleRxCallbacks;
   void handleRxChunk(const std::string &value);
   void sendLine(const String &line);
   void sendChunk(const uint8_t *data, size_t length);

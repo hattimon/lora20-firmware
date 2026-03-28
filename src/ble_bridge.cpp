@@ -2,16 +2,16 @@
 
 #include <BLE2902.h>
 
-namespace {
-
 constexpr const char *kServiceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr const char *kRxUuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr const char *kTxUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr size_t kChunkSize = 20;
 
+namespace lora20 {
+
 class BleServerCallbacks : public BLEServerCallbacks {
  public:
-  explicit BleServerCallbacks(lora20::BleBridge &bridge) : bridge_(bridge) {}
+  explicit BleServerCallbacks(BleBridge &bridge) : bridge_(bridge) {}
 
   void onConnect(BLEServer *) override {
     bridge_.connected_ = true;
@@ -25,12 +25,12 @@ class BleServerCallbacks : public BLEServerCallbacks {
   }
 
  private:
-  lora20::BleBridge &bridge_;
+  BleBridge &bridge_;
 };
 
 class BleRxCallbacks : public BLECharacteristicCallbacks {
  public:
-  explicit BleRxCallbacks(lora20::BleBridge &bridge) : bridge_(bridge) {}
+  explicit BleRxCallbacks(BleBridge &bridge) : bridge_(bridge) {}
 
   void onWrite(BLECharacteristic *characteristic) override {
     const std::string value = characteristic->getValue();
@@ -40,7 +40,7 @@ class BleRxCallbacks : public BLECharacteristicCallbacks {
   }
 
  private:
-  lora20::BleBridge &bridge_;
+  BleBridge &bridge_;
 };
 
 String buildBleName() {
@@ -51,9 +51,7 @@ String buildBleName() {
   return name;
 }
 
-}  // namespace
-
-namespace lora20 {
+}  // namespace lora20
 
 BleBridge::BleBridge(RpcProcessor &processor)
     : processor_(processor),
@@ -158,7 +156,7 @@ void BleBridge::sendLine(const String &line) {
 
 void BleBridge::sendChunk(const uint8_t *data, size_t length) {
   if (!tx_) return;
-  tx_->setValue(data, length);
+  tx_->setValue(const_cast<uint8_t *>(data), length);
   tx_->notify();
 }
 
