@@ -254,6 +254,35 @@ String connectionModeLabel(lora20::ConnectionMode mode) {
   }
 }
 
+bool tryInitDisplay(uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) {
+  SSD1306Wire *candidate = new SSD1306Wire(0x3c, i2cFreq, SDA_OLED, SCL_OLED, geometry, rstPin);
+  if (candidate == nullptr) {
+    Serial.println("[display] allocation failed");
+    return false;
+  }
+  if (!candidate->init()) {
+    Serial.printf("[display] init failed freq=%lu rst=%d geom=%d\n",
+                  static_cast<unsigned long>(i2cFreq),
+                  static_cast<int>(rstPin),
+                  static_cast<int>(geometry));
+    delete candidate;
+    return false;
+  }
+
+  Serial.printf("[display] init ok freq=%lu rst=%d geom=%d\n",
+                static_cast<unsigned long>(i2cFreq),
+                static_cast<int>(rstPin),
+                static_cast<int>(geometry));
+  Heltec.display = candidate;
+  Heltec.display->clear();
+  Heltec.display->setFont(ArialMT_Plain_10);
+  Heltec.display->displayOn();
+  Heltec.display->drawString(0, 0, "LORA20 boot");
+  Heltec.display->drawString(0, 12, String("OLED ") + String(i2cFreq) + "Hz");
+  Heltec.display->display();
+  return true;
+}
+
 void pushSystemEvent(const String &label) {
   DeviceEvent event;
   event.label = label;
@@ -872,16 +901,16 @@ void applyConnectivityPolicy() {
   bool enableWifi = false;
   switch (connection.mode) {
     case lora20::ConnectionMode::kUsb:
-      enableBle = true;
-      enableWifi = wifiConfigured;
+      enableBle = windowOpen;
+      enableWifi = windowOpen && wifiConfigured;
       break;
     case lora20::ConnectionMode::kBle:
-      enableBle = windowOpen || g_bleBridge.connected();
+      enableBle = true;
       enableWifi = false;
       break;
     case lora20::ConnectionMode::kWifi:
       enableBle = false;
-      enableWifi = wifiConfigured && (windowOpen || g_wifiBridge.isClientActive(nowMs, kLinkIdleGraceMs));
+      enableWifi = wifiConfigured;
       break;
     default:
       break;
@@ -919,16 +948,28 @@ void setup() {
 #ifdef Heltec_Vext
   // Heltec V4 OLED power rail is controlled by Vext. Force it ON before custom display init.
   Heltec.VextON();
+  delay(50);
 #endif
 #if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
-  // Force explicit OLED init. On some Heltec V4 builds default constructor path does not start the screen.
-  Heltec.display = new SSD1306Wire(0x3c, LORA20_OLED_FREQ, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
-  if (Heltec.display != nullptr && Heltec.display->init()) {
-    Heltec.display->clear();
-    Heltec.display->setFont(ArialMT_Plain_10);
-    Heltec.display->displayOn();
-    Heltec.display->display();
-    g_displayReady = true;
+  // Force explicit OLED init with fallbacks for Heltec V4 variants.
+  Heltec.display = nullptr;
+  const uint32_t freqs[] = {500000UL, 400000UL, 100000UL};
+  const int8_t resetPins[] = {RST_OLED, -1};
+  const DISPLAY_GEOMETRY geometries[] = {GEOMETRY_128_64, GEOMETRY_64_32};
+  for (const auto freq : freqs) {
+    for (const auto resetPin : resetPins) {
+      for (const auto geometry : geometries) {
+        if (tryInitDisplay(freq, resetPin, geometry)) {
+          g_displayReady = true;
+          break;
+        }
+      }
+      if (g_displayReady) break;
+    }
+    if (g_displayReady) break;
+  }
+  if (!g_displayReady) {
+    Serial.println("[display] all init attempts failed");
   }
 #else
   if (Heltec.display != nullptr) {
