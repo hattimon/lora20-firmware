@@ -39,7 +39,27 @@ constexpr unsigned long kLongPressMs = 3000;
 #define LORA20_PRG_PIN 0
 #endif
 #ifndef LORA20_BATTERY_PIN
+#if defined(WIFI_LORA_32_V4)
+#define LORA20_BATTERY_PIN 1
+#else
 #define LORA20_BATTERY_PIN -1
+#endif
+#endif
+#ifndef LORA20_BATTERY_ENABLE_PIN
+#if defined(WIFI_LORA_32_V4)
+#define LORA20_BATTERY_ENABLE_PIN 37
+#else
+#define LORA20_BATTERY_ENABLE_PIN -1
+#endif
+#endif
+#ifndef LORA20_BATTERY_DIVIDER
+#define LORA20_BATTERY_DIVIDER 4.9f
+#endif
+#ifndef LORA20_BATTERY_MIN_V
+#define LORA20_BATTERY_MIN_V 3.2f
+#endif
+#ifndef LORA20_BATTERY_MAX_V
+#define LORA20_BATTERY_MAX_V 4.2f
 #endif
 
 bool g_displayReady = false;
@@ -161,12 +181,22 @@ void pushDeviceEvent(const DeviceEvent &event) {
 
 int readBatteryPercent() {
   if (LORA20_BATTERY_PIN < 0) return -1;
+  if (LORA20_BATTERY_ENABLE_PIN >= 0) {
+    pinMode(LORA20_BATTERY_ENABLE_PIN, OUTPUT);
+    digitalWrite(LORA20_BATTERY_ENABLE_PIN, HIGH);
+    delay(2);
+  }
   analogReadResolution(12);
+  analogSetPinAttenuation(LORA20_BATTERY_PIN, ADC_11db);
   const uint16_t raw = analogRead(LORA20_BATTERY_PIN);
+  if (LORA20_BATTERY_ENABLE_PIN >= 0) {
+    digitalWrite(LORA20_BATTERY_ENABLE_PIN, LOW);
+  }
   if (raw == 0) return -1;
-  const float voltage = (static_cast<float>(raw) / 4095.0f) * 2.0f * 3.3f;
-  const float clamped = std::min(4.2f, std::max(3.2f, voltage));
-  const int percent = static_cast<int>(((clamped - 3.2f) / (4.2f - 3.2f)) * 100.0f + 0.5f);
+  const float vAdc = (static_cast<float>(raw) / 4095.0f) * 3.3f;
+  const float voltage = vAdc * LORA20_BATTERY_DIVIDER;
+  const float clamped = std::min(LORA20_BATTERY_MAX_V, std::max(LORA20_BATTERY_MIN_V, voltage));
+  const int percent = static_cast<int>(((clamped - LORA20_BATTERY_MIN_V) / (LORA20_BATTERY_MAX_V - LORA20_BATTERY_MIN_V)) * 100.0f + 0.5f);
   return std::min(100, std::max(0, percent));
 }
 
