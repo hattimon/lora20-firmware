@@ -37,6 +37,7 @@ struct ConnectionConfig {
   char wifiSsid[33];
   char wifiPassword[65];
   char rpcToken[65];
+  bool wifiApFallback = false;
 
   ConnectionConfig();
 };

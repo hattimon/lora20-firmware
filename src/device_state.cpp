@@ -37,6 +37,7 @@ constexpr const char *kConnectionModeKey = "cn_mode";
 constexpr const char *kWifiSsidKey = "cn_ssid";
 constexpr const char *kWifiPassKey = "cn_pass";
 constexpr const char *kRpcTokenKey = "cn_token";
+constexpr const char *kWifiApFallbackKey = "cn_apfb";
 
 constexpr uint8_t kBackupVersion = 1;
 constexpr size_t kBackupSaltLength = 16;
@@ -292,6 +293,7 @@ ConnectionConfig::ConnectionConfig() {
   std::memset(wifiSsid, 0, sizeof(wifiSsid));
   std::memset(wifiPassword, 0, sizeof(wifiPassword));
   std::memset(rpcToken, 0, sizeof(rpcToken));
+  wifiApFallback = false;
 }
 
 DeviceConfig::DeviceConfig() {
@@ -360,6 +362,7 @@ bool DeviceStateStore::loadSnapshot(String &error) {
   const String wifiSsid = prefs_.getString(kWifiSsidKey, "");
   const String wifiPass = prefs_.getString(kWifiPassKey, "");
   const String rpcToken = prefs_.getString(kRpcTokenKey, "");
+  snapshot_.connection.wifiApFallback = prefs_.getBool(kWifiApFallbackKey, false);
   std::strncpy(snapshot_.connection.wifiSsid, wifiSsid.c_str(), sizeof(snapshot_.connection.wifiSsid) - 1);
   std::strncpy(snapshot_.connection.wifiPassword, wifiPass.c_str(), sizeof(snapshot_.connection.wifiPassword) - 1);
   std::strncpy(snapshot_.connection.rpcToken, rpcToken.c_str(), sizeof(snapshot_.connection.rpcToken) - 1);
@@ -756,6 +759,11 @@ bool DeviceStateStore::persistConnectionConfig(String &error) {
     }
   } else if (prefs_.getString(kRpcTokenKey, "").length() != 0 && !prefs_.remove(kRpcTokenKey)) {
     error = "Failed to clear RPC token";
+    return false;
+  }
+
+  if (!prefs_.putBool(kWifiApFallbackKey, snapshot_.connection.wifiApFallback)) {
+    error = "Failed to persist Wi-Fi AP fallback flag";
     return false;
   }
 

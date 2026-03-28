@@ -7,9 +7,12 @@
 
 namespace lora20 {
 
+class WifiBridge;
+
 class RpcProcessor {
  public:
   RpcProcessor(DeviceStateStore &state, LoRaWanClient &lorawan);
+  void setWifiBridge(WifiBridge *bridge);
 
   // Returns true when a response should be sent.
   bool handleLine(const String &line, String &response, bool requireAuth = false);
@@ -18,6 +21,7 @@ class RpcProcessor {
  private:
   DeviceStateStore &state_;
   LoRaWanClient &lorawan_;
+  WifiBridge *wifiBridge_ = nullptr;
 };
 
 }  // namespace lora20

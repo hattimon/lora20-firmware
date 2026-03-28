@@ -18,6 +18,7 @@ class WifiBridge {
 
   String ipAddress() const;
   String modeLabel() const;
+  String hostname() const;
 
  private:
   enum class Mode {
@@ -32,6 +33,7 @@ class WifiBridge {
   void stopWifi();
   void ensureServer();
   void updateConnectionState();
+  void startMdnsIfNeeded();
   void handleRpc();
   void handleOptions();
   void handleHealth();
@@ -43,9 +45,12 @@ class WifiBridge {
   bool enabled_ = false;
   bool serverStarted_ = false;
   bool wantsSta_ = false;
+  bool allowApFallback_ = false;
+  bool mdnsStarted_ = false;
   unsigned long connectStartedMs_ = 0;
   Mode mode_ = Mode::kOff;
   String apSsid_;
+  String hostname_;
   String staSsid_;
   String staPass_;
 };

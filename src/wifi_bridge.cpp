@@ -1,6 +1,7 @@
 #include "wifi_bridge.hpp"
 
 #include <ArduinoJson.h>
+#include <ESPmDNS.h>
 #include <cstdio>
 
 namespace {
@@ -16,6 +17,15 @@ String buildSsid() {
   return ssid;
 }
 
+String buildHostname() {
+  const uint64_t chipId = ESP.getEfuseMac();
+  char suffix[9];
+  snprintf(suffix, sizeof(suffix), "%08llx", static_cast<unsigned long long>(chipId & 0xFFFFFFFFULL));
+  String name = String("lora20-") + String(suffix).substring(4);
+  name.toLowerCase();
+  return name;
+}
+
 }  // namespace
 
 namespace lora20 {
@@ -26,6 +36,7 @@ WifiBridge::WifiBridge(RpcProcessor &processor)
 
 void WifiBridge::begin() {
   apSsid_ = buildSsid();
+  hostname_ = buildHostname();
   server_.on("/", HTTP_GET, [this]() { handleHealth(); });
   server_.on("/health", HTTP_GET, [this]() { handleHealth(); });
   server_.on("/rpc", HTTP_OPTIONS, [this]() { handleOptions(); });
@@ -44,6 +55,7 @@ void WifiBridge::applyConfig(const ConnectionConfig &config) {
   const String ssid = String(config.wifiSsid);
   const String pass = String(config.wifiPassword);
   const bool wantsSta = ssid.length() > 0;
+  allowApFallback_ = config.wifiApFallback;
 
   if (!shouldEnable) {
     if (enabled_) {
@@ -63,8 +75,10 @@ void WifiBridge::applyConfig(const ConnectionConfig &config) {
     wantsSta_ = wantsSta;
     if (wantsSta_) {
       startSta();
-    } else {
+    } else if (allowApFallback_) {
       startAp();
+    } else {
+      stopWifi();
     }
   }
 }
@@ -93,12 +107,17 @@ String WifiBridge::modeLabel() const {
   }
 }
 
+String WifiBridge::hostname() const {
+  return hostname_;
+}
+
 void WifiBridge::startAp() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_AP);
   WiFi.softAP(apSsid_.c_str(), kApPassword);
   mode_ = Mode::kAp;
   connectStartedMs_ = 0;
+  mdnsStarted_ = false;
 }
 
 void WifiBridge::startSta() {
@@ -107,6 +126,7 @@ void WifiBridge::startSta() {
   WiFi.begin(staSsid_.c_str(), staPass_.c_str());
   mode_ = Mode::kStaConnecting;
   connectStartedMs_ = millis();
+  mdnsStarted_ = false;
 }
 
 void WifiBridge::stopWifi() {
@@ -119,6 +139,7 @@ void WifiBridge::stopWifi() {
   enabled_ = false;
   wantsSta_ = false;
   mode_ = Mode::kOff;
+  mdnsStarted_ = false;
 }
 
 void WifiBridge::ensureServer() {
@@ -133,17 +154,36 @@ void WifiBridge::updateConnectionState() {
   if (mode_ == Mode::kStaConnecting) {
     if (WiFi.status() == WL_CONNECTED) {
       mode_ = Mode::kStaConnected;
+      startMdnsIfNeeded();
       return;
     }
     if (connectStartedMs_ > 0 && (millis() - connectStartedMs_) > kStaTimeoutMs) {
-      startAp();
+      if (allowApFallback_) {
+        startAp();
+      } else {
+        startSta();
+      }
     }
   } else if (mode_ == Mode::kStaConnected && WiFi.status() != WL_CONNECTED) {
     if (wantsSta_) {
       startSta();
-    } else {
+    } else if (allowApFallback_) {
       startAp();
+    } else {
+      stopWifi();
     }
+  } else if (mode_ == Mode::kStaConnected) {
+    startMdnsIfNeeded();
+  }
+}
+
+void WifiBridge::startMdnsIfNeeded() {
+  if (mdnsStarted_ || mode_ != Mode::kStaConnected) return;
+  if (hostname_.length() == 0) return;
+  if (MDNS.begin(hostname_.c_str())) {
+    MDNS.addService("http", "tcp", 80);
+    MDNS.addService("lora20", "tcp", 80);
+    mdnsStarted_ = true;
   }
 }
 
@@ -170,6 +210,8 @@ void WifiBridge::handleHealth() {
   response["mode"] = modeLabel();
   response["ssid"] = (mode_ == Mode::kAp) ? apSsid_ : staSsid_;
   response["ip"] = ipAddress();
+  response["hostname"] = hostname_;
+  response["apFallback"] = allowApFallback_;
   response["apPassword"] = (mode_ == Mode::kAp) ? kApPassword : "";
   String payload;
   serializeJson(response, payload);

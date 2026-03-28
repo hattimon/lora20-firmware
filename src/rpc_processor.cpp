@@ -1,5 +1,7 @@
 #include "rpc_processor.hpp"
 
+#include "wifi_bridge.hpp"
+
 #include <ArduinoJson.h>
 #include <cstdio>
 #include <cstring>
@@ -144,6 +146,7 @@ void writeConnectionConfig(JsonObject target, const lora20::ConnectionConfig &co
   target["wifiSsid"] = String(config.wifiSsid);
   target["wifiConfigured"] = std::strlen(config.wifiSsid) > 0;
   target["tokenSet"] = std::strlen(config.rpcToken) > 0;
+  target["wifiApFallback"] = config.wifiApFallback;
 }
 
 bool readMintProfilesParam(JsonVariantConst value, std::vector<lora20::MintProfile> &profiles, String &error) {
@@ -309,6 +312,10 @@ namespace lora20 {
 RpcProcessor::RpcProcessor(DeviceStateStore &state, LoRaWanClient &lorawan)
     : state_(state), lorawan_(lorawan) {}
 
+void RpcProcessor::setWifiBridge(WifiBridge *bridge) {
+  wifiBridge_ = bridge;
+}
+
 void RpcProcessor::buildBootEvent(String &response) {
   DynamicJsonDocument boot(1024);
   boot["type"] = "boot";
@@ -453,6 +460,11 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
   if (strcmp(command, "get_connectivity") == 0) {
     sendSuccess([&](JsonObject result) {
       writeConnectionConfig(result, state_.snapshot().connection);
+      if (wifiBridge_ != nullptr) {
+        result["wifiMode"] = wifiBridge_->modeLabel();
+        result["wifiIp"] = wifiBridge_->ipAddress();
+        result["wifiHostname"] = wifiBridge_->hostname();
+      }
     });
     return true;
   }
@@ -507,6 +519,10 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
       }
       std::memset(next.rpcToken, 0, sizeof(next.rpcToken));
       std::strncpy(next.rpcToken, token.c_str(), sizeof(next.rpcToken) - 1);
+    }
+
+    if (params["wifiApFallback"].is<bool>()) {
+      next.wifiApFallback = params["wifiApFallback"].as<bool>();
     }
 
     if (!state_.updateConnectionConfig(next, error)) {

@@ -241,6 +241,16 @@ void updateDisplay() {
   const auto &runtime = g_lorawan.status();
   const int battery = readBatteryPercent();
   const String clock = formatClock();
+  String wifiLine;
+  if (snapshot.connection.mode == lora20::ConnectionMode::kWifi) {
+    const String ip = g_wifiBridge.ipAddress();
+    if (ip.length() > 0) {
+      wifiLine = "WiFi: " + ip;
+    } else {
+      const String modeLabel = g_wifiBridge.modeLabel();
+      wifiLine = modeLabel == "sta_connecting" ? "WiFi: connecting" : "WiFi: offline";
+    }
+  }
 
   Heltec.display->clear();
   Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -258,13 +268,21 @@ void updateDisplay() {
   Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
 
   if (g_displayScreen == 0) {
-    Heltec.display->drawString(0, 14, runtime.joined ? "LoRa: joined" : "LoRa: offline");
-    Heltec.display->drawString(0, 26, "Last:");
+    int y = 14;
+    if (wifiLine.length() > 0) {
+      Heltec.display->drawString(0, y, wifiLine);
+      y += 12;
+    }
+    Heltec.display->drawString(0, y, runtime.joined ? "LoRa: joined" : "LoRa: offline");
+    y += 12;
+    Heltec.display->drawString(0, y, "Last:");
+    y += 12;
     if (!g_deviceEvents.empty()) {
-      Heltec.display->drawString(0, 38, truncateText(g_deviceEvents.front().label, 20));
-      Heltec.display->drawString(0, 50, "nonce " + String(g_deviceEvents.front().nonce));
+      Heltec.display->drawString(0, y, truncateText(g_deviceEvents.front().label, 20));
+      y += 12;
+      Heltec.display->drawString(0, y, "nonce " + String(g_deviceEvents.front().nonce));
     } else {
-      Heltec.display->drawString(0, 38, "no events yet");
+      Heltec.display->drawString(0, y, "no events yet");
     }
   } else if (g_displayScreen == 1) {
     const String autoMint = snapshot.config.autoMintEnabled ? "AutoMint ON" : "AutoMint OFF";
@@ -591,6 +609,7 @@ void setup() {
 
   g_rpc.begin();
   g_wifiBridge.begin();
+  g_rpcProcessor.setWifiBridge(&g_wifiBridge);
   g_ready = true;
 }
 
