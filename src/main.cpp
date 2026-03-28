@@ -854,6 +854,10 @@ void applyConnectivityPolicy() {
   if (latestActivity > g_lastBridgeActivityMs) {
     g_lastBridgeActivityMs = latestActivity;
     g_bridgeWindowUntilMs = latestActivity + windowMs;
+    markUserInteraction();
+    if (g_displaySleeping) {
+      wakeDisplay();
+    }
   }
   if (g_bridgeWindowUntilMs == 0) {
     g_bridgeWindowUntilMs = nowMs + windowMs;
@@ -868,8 +872,8 @@ void applyConnectivityPolicy() {
   bool enableWifi = false;
   switch (connection.mode) {
     case lora20::ConnectionMode::kUsb:
-      enableBle = windowOpen;
-      enableWifi = windowOpen && wifiConfigured;
+      enableBle = true;
+      enableWifi = wifiConfigured;
       break;
     case lora20::ConnectionMode::kBle:
       enableBle = windowOpen || g_bleBridge.connected();

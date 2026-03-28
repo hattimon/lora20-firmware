@@ -59,6 +59,19 @@ String toLowerAscii(const String &input) {
   return output;
 }
 
+String normalizeAuthToken(String token) {
+  token.trim();
+  if (token.startsWith("Bearer ")) {
+    token = token.substring(7);
+    token.trim();
+  }
+  if (token.startsWith("bearer ")) {
+    token = token.substring(7);
+    token.trim();
+  }
+  return token;
+}
+
 bool normalizeHeltecLicenseInput(const String &rawInput, String &normalized) {
   String working = rawInput;
   working.trim();
@@ -393,14 +406,23 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
     writeResponse(response, responseDoc);
   };
 
-  const String storedToken = String(state_.snapshot().connection.rpcToken);
+  const String storedToken = normalizeAuthToken(String(state_.snapshot().connection.rpcToken));
   if (requireAuth && storedToken.length() > 0) {
     String provided;
-    if (request["auth"].is<const char *>()) {
-      provided = request["auth"].as<const char *>();
-    } else if (params["auth"].is<const char *>()) {
-      provided = params["auth"].as<const char *>();
-    }
+    auto consumeTokenCandidate = [&](JsonVariantConst candidate) {
+      if (provided.length() == 0 && candidate.is<const char *>()) {
+        provided = normalizeAuthToken(String(candidate.as<const char *>()));
+      }
+    };
+
+    consumeTokenCandidate(request["auth"]);
+    consumeTokenCandidate(request["token"]);
+    consumeTokenCandidate(request["rpcToken"]);
+    consumeTokenCandidate(request["authorization"]);
+    consumeTokenCandidate(params["auth"]);
+    consumeTokenCandidate(params["token"]);
+    consumeTokenCandidate(params["rpcToken"]);
+    consumeTokenCandidate(params["authorization"]);
 
     if (provided.length() == 0 || provided != storedToken) {
       sendError("unauthorized", "Auth token is required for this connection");
@@ -515,7 +537,7 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
     }
 
     if (params["rpcToken"].is<const char *>()) {
-      const String token = String(params["rpcToken"].as<const char *>());
+      const String token = normalizeAuthToken(String(params["rpcToken"].as<const char *>()));
       if (token.length() >= sizeof(next.rpcToken)) {
         sendError("invalid_rpc_token", "rpcToken is too long");
         return true;

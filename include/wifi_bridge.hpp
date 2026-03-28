@@ -40,6 +40,8 @@ class WifiBridge {
   void handleRpc();
   void handleOptions();
   void handleHealth();
+  String extractAuthTokenFromHeaders();
+  String injectAuthTokenIfMissing(const String &body);
   void sendJson(int code, const String &payload);
   void sendCorsHeaders();
 

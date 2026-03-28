@@ -8,6 +8,7 @@ namespace {
 
 constexpr const char *kApPassword = "lora20-setup";
 constexpr unsigned long kStaTimeoutMs = 12000;
+const char *kAuthHeaderNames[] = {"Authorization", "X-Lora20-Auth", "X-Auth-Token"};
 
 String buildSsid() {
   const uint64_t chipId = ESP.getEfuseMac();
@@ -26,6 +27,19 @@ String buildHostname() {
   return name;
 }
 
+String normalizeToken(String token) {
+  token.trim();
+  if (token.startsWith("Bearer ")) {
+    token = token.substring(7);
+    token.trim();
+  }
+  if (token.startsWith("bearer ")) {
+    token = token.substring(7);
+    token.trim();
+  }
+  return token;
+}
+
 }  // namespace
 
 namespace lora20 {
@@ -37,6 +51,7 @@ WifiBridge::WifiBridge(RpcProcessor &processor)
 void WifiBridge::begin() {
   apSsid_ = buildSsid();
   hostname_ = buildHostname();
+  server_.collectHeaders(kAuthHeaderNames, sizeof(kAuthHeaderNames) / sizeof(kAuthHeaderNames[0]));
   server_.on("/", HTTP_GET, [this]() { handleHealth(); });
   server_.on("/health", HTTP_GET, [this]() { handleHealth(); });
   server_.on("/rpc", HTTP_OPTIONS, [this]() { handleOptions(); });
@@ -198,9 +213,12 @@ void WifiBridge::updateConnectionState() {
 void WifiBridge::startMdnsIfNeeded() {
   if (mdnsStarted_ || mode_ != Mode::kStaConnected) return;
   if (hostname_.length() == 0) return;
+  MDNS.end();
   if (MDNS.begin(hostname_.c_str())) {
-    MDNS.addService("http", "tcp", 80);
-    MDNS.addService("lora20", "tcp", 80);
+    const bool httpOk = MDNS.addService("http", "tcp", 80);
+    const bool rpcOk = MDNS.addService("lora20", "tcp", 80);
+    (void)httpOk;
+    (void)rpcOk;
     mdnsStarted_ = true;
   }
 }
@@ -208,7 +226,7 @@ void WifiBridge::startMdnsIfNeeded() {
 void WifiBridge::sendCorsHeaders() {
   server_.sendHeader("Access-Control-Allow-Origin", "*");
   server_.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  server_.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  server_.sendHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Lora20-Auth, X-Auth-Token");
 }
 
 void WifiBridge::sendJson(int code, const String &payload) {
@@ -238,9 +256,45 @@ void WifiBridge::handleHealth() {
   sendJson(200, payload);
 }
 
+String WifiBridge::extractAuthTokenFromHeaders() {
+  for (const char *headerName : kAuthHeaderNames) {
+    if (!server_.hasHeader(headerName)) {
+      continue;
+    }
+    String token = normalizeToken(server_.header(headerName));
+    if (token.length() > 0) {
+      return token;
+    }
+  }
+  return "";
+}
+
+String WifiBridge::injectAuthTokenIfMissing(const String &body) {
+  const String headerToken = extractAuthTokenFromHeaders();
+  if (headerToken.length() == 0 || body.length() == 0) {
+    return body;
+  }
+
+  DynamicJsonDocument request(3072);
+  if (deserializeJson(request, body) != DeserializationError::Ok) {
+    return body;
+  }
+
+  const String topLevelAuth = request["auth"].is<const char *>() ? normalizeToken(String(request["auth"].as<const char *>())) : String("");
+  const String paramsAuth = request["params"]["auth"].is<const char *>() ? normalizeToken(String(request["params"]["auth"].as<const char *>())) : String("");
+  if (topLevelAuth.length() > 0 || paramsAuth.length() > 0) {
+    return body;
+  }
+
+  request["auth"] = headerToken;
+  String withAuth;
+  serializeJson(request, withAuth);
+  return withAuth;
+}
+
 void WifiBridge::handleRpc() {
   lastActivityMs_ = millis();
-  const String body = server_.arg("plain");
+  const String body = injectAuthTokenIfMissing(server_.arg("plain"));
   String response;
   if (!processor_.handleLine(body, response, true)) {
     DynamicJsonDocument fallback(256);
