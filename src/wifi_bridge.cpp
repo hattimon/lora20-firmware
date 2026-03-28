@@ -65,9 +65,6 @@ void WifiBridge::applyConfig(const ConnectionConfig &config, bool enabled) {
   }
 
   enabled_ = true;
-  if (!serverStarted_) {
-    ensureServer();
-  }
 
   if (wantsSta != wantsSta_ || ssid != staSsid_ || pass != staPass_ || mode_ == Mode::kOff) {
     staSsid_ = ssid;
@@ -128,6 +125,7 @@ void WifiBridge::startAp() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_AP);
   WiFi.softAP(apSsid_.c_str(), kApPassword);
+  ensureServer();
   mode_ = Mode::kAp;
   connectStartedMs_ = 0;
   mdnsStarted_ = false;
@@ -136,6 +134,7 @@ void WifiBridge::startAp() {
 void WifiBridge::startSta() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
+  ensureServer();
   WiFi.begin(staSsid_.c_str(), staPass_.c_str());
   mode_ = Mode::kStaConnecting;
   connectStartedMs_ = millis();
@@ -160,6 +159,9 @@ void WifiBridge::stopWifi() {
 
 void WifiBridge::ensureServer() {
   if (!serverStarted_) {
+    if (WiFi.getMode() == WIFI_MODE_NULL) {
+      return;
+    }
     server_.begin();
     serverStarted_ = true;
   }

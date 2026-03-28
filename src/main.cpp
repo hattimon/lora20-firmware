@@ -910,6 +910,10 @@ void setup() {
   }
 
   Heltec.begin(false, false, false);
+#ifdef Heltec_Vext
+  // Heltec V4 OLED power rail is controlled by Vext. Force it ON before custom display init.
+  Heltec.VextON();
+#endif
 #if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
   // Force explicit OLED init. On some Heltec V4 builds default constructor path does not start the screen.
   Heltec.display = new SSD1306Wire(0x3c, LORA20_OLED_FREQ, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
