@@ -334,15 +334,14 @@ bool probeDisplayAddress(uint8_t address, uint32_t i2cFreq) {
 
 void applyDisplayBrightness() {
   if (Heltec.display == nullptr) return;
-  uint8_t brightness = g_state.snapshot().connection.displayBrightness;
-  if (brightness == 0) {
-    brightness = 1;
-  }
+  const uint8_t requested = g_state.snapshot().connection.displayBrightness;
+  // Avoid a fully black screen if the stored value is zero/corrupt.
+  uint8_t brightness = requested == 0 ? 255 : requested;
   Heltec.display->wakeup();
-  Heltec.display->setContrast(brightness, 0xF1, 0x40);
+  Heltec.display->setBrightness(brightness);
   Heltec.display->normalDisplay();
   Heltec.display->displayOn();
-  g_lastDisplayBrightness = g_state.snapshot().connection.displayBrightness;
+  g_lastDisplayBrightness = requested;
 }
 
 bool tryInitDisplay(uint8_t address, uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) {
