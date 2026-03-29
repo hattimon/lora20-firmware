@@ -552,7 +552,7 @@ void updateDisplay() {
 
   Heltec.display->clear();
   Heltec.display->setColor(WHITE);
-  Heltec.display->fillRect(0, 0, 128, 64);
+  Heltec.display->fillRect(0, 0, 128, 12);
   Heltec.display->setColor(BLACK);
   Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
   Heltec.display->setFont(ArialMT_Plain_10);
@@ -567,6 +567,8 @@ void updateDisplay() {
   Heltec.display->setTextAlignment(TEXT_ALIGN_RIGHT);
   Heltec.display->drawString(128, 0, clock);
   Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
+  Heltec.display->setColor(WHITE);
+  Heltec.display->drawHorizontalLine(0, 13, 128);
 
   if (g_displayScreen == DisplayScreen::kMintStream) {
     Heltec.display->drawString(0, 14, "Mint stream");
