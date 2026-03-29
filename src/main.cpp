@@ -83,6 +83,7 @@ enum class UiMode : uint8_t {
 
 bool g_displayReady = false;
 bool g_displaySleeping = false;
+uint8_t g_lastDisplayBrightness = 255;
 DisplayScreen g_displayScreen = DisplayScreen::kConnectivity;
 UiMode g_uiMode = UiMode::kView;
 uint8_t g_menuIndex = 0;
@@ -333,10 +334,15 @@ bool probeDisplayAddress(uint8_t address, uint32_t i2cFreq) {
 
 void applyDisplayBrightness() {
   if (Heltec.display == nullptr) return;
+  uint8_t brightness = g_state.snapshot().connection.displayBrightness;
+  if (brightness == 0) {
+    brightness = 1;
+  }
   Heltec.display->wakeup();
-  Heltec.display->setContrast(255, 0xF1, 0x40);
+  Heltec.display->setContrast(brightness, 0xF1, 0x40);
   Heltec.display->normalDisplay();
   Heltec.display->displayOn();
+  g_lastDisplayBrightness = g_state.snapshot().connection.displayBrightness;
 }
 
 bool tryInitDisplay(uint8_t address, uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) {
@@ -595,7 +601,11 @@ void updateDisplay() {
   if (!g_displayReady || Heltec.display == nullptr) return;
 
   const unsigned long nowMs = millis();
-  const uint16_t sleepSeconds = g_state.snapshot().connection.displaySleepSeconds;
+  const auto &snapshot = g_state.snapshot();
+  const uint16_t sleepSeconds = snapshot.connection.displaySleepSeconds;
+  if (!g_displaySleeping && snapshot.connection.displayBrightness != g_lastDisplayBrightness) {
+    applyDisplayBrightness();
+  }
   if (!g_displaySleeping && sleepSeconds > 0 &&
       nowMs > g_lastUserInteractionMs &&
       (nowMs - g_lastUserInteractionMs) >= static_cast<unsigned long>(sleepSeconds) * 1000UL) {
@@ -608,7 +618,6 @@ void updateDisplay() {
   if ((nowMs - g_lastDisplayUpdateMs) < kDisplayRefreshMs) return;
   g_lastDisplayUpdateMs = nowMs;
 
-  const auto &snapshot = g_state.snapshot();
   const auto &runtime = g_lorawan.status();
   const int battery = readBatteryPercent();
   const String clock = formatClock();

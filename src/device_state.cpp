@@ -40,6 +40,7 @@ constexpr const char *kWifiPassKey = "cn_pass";
 constexpr const char *kRpcTokenKey = "cn_token";
 constexpr const char *kWifiApFallbackKey = "cn_apfb";
 constexpr const char *kDisplaySleepSecondsKey = "cn_dslp";
+constexpr const char *kDisplayBrightnessKey = "cn_bri";
 constexpr const char *kBridgeWindowSecondsKey = "cn_bwin";
 constexpr const char *kPowerSaveLevelKey = "cn_pslv";
 
@@ -299,6 +300,7 @@ ConnectionConfig::ConnectionConfig() {
   std::memset(rpcToken, 0, sizeof(rpcToken));
   wifiApFallback = false;
   displaySleepSeconds = 60;
+  displayBrightness = 255;
   bridgeWindowSeconds = 300;
   powerSaveLevel = 1;
 }
@@ -371,6 +373,7 @@ bool DeviceStateStore::loadSnapshot(String &error) {
   const String rpcToken = prefs_.getString(kRpcTokenKey, "");
   snapshot_.connection.wifiApFallback = prefs_.getBool(kWifiApFallbackKey, false);
   const uint32_t displaySleepSeconds = prefs_.getUInt(kDisplaySleepSecondsKey, 60);
+  const uint8_t displayBrightness = prefs_.getUChar(kDisplayBrightnessKey, 255);
   const uint32_t bridgeWindowSeconds = prefs_.getUInt(kBridgeWindowSecondsKey, 300);
   const uint8_t powerSaveLevel = prefs_.getUChar(kPowerSaveLevelKey, 1);
   std::strncpy(snapshot_.connection.wifiSsid, wifiSsid.c_str(), sizeof(snapshot_.connection.wifiSsid) - 1);
@@ -378,6 +381,7 @@ bool DeviceStateStore::loadSnapshot(String &error) {
   std::strncpy(snapshot_.connection.rpcToken, rpcToken.c_str(), sizeof(snapshot_.connection.rpcToken) - 1);
   snapshot_.connection.displaySleepSeconds =
       static_cast<uint16_t>(std::min<uint32_t>(3600, displaySleepSeconds));
+  snapshot_.connection.displayBrightness = displayBrightness;
   snapshot_.connection.bridgeWindowSeconds =
       static_cast<uint16_t>(std::max<uint32_t>(30, std::min<uint32_t>(3600, bridgeWindowSeconds)));
   snapshot_.connection.powerSaveLevel = powerSaveLevel <= 2 ? powerSaveLevel : 1;
@@ -799,6 +803,11 @@ bool DeviceStateStore::persistConnectionConfig(String &error) {
 
   if (prefs_.putUInt(kDisplaySleepSecondsKey, snapshot_.connection.displaySleepSeconds) != sizeof(uint32_t)) {
     error = "Failed to persist display sleep timeout";
+    return false;
+  }
+
+  if (!prefs_.putUChar(kDisplayBrightnessKey, snapshot_.connection.displayBrightness)) {
+    error = "Failed to persist display brightness";
     return false;
   }
 

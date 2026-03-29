@@ -161,6 +161,7 @@ void writeConnectionConfig(JsonObject target, const lora20::ConnectionConfig &co
   target["tokenSet"] = std::strlen(config.rpcToken) > 0;
   target["wifiApFallback"] = config.wifiApFallback;
   target["displaySleepSeconds"] = config.displaySleepSeconds;
+  target["displayBrightness"] = config.displayBrightness;
   target["bridgeWindowSeconds"] = config.bridgeWindowSeconds;
   target["powerSaveLevel"] = config.powerSaveLevel;
 }
@@ -639,6 +640,15 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
         return true;
       }
       next.displaySleepSeconds = static_cast<uint16_t>(value);
+    }
+
+    if (!params["displayBrightness"].isNull()) {
+      uint32_t value = 0;
+      if (!readUint32Param(params["displayBrightness"], value) || value > 255) {
+        sendError("invalid_display_brightness", "displayBrightness must be between 0 and 255");
+        return true;
+      }
+      next.displayBrightness = static_cast<uint8_t>(value);
     }
 
     if (!params["bridgeWindowSeconds"].isNull()) {
