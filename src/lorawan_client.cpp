@@ -125,6 +125,18 @@ void LoRaWanClient::poll() {
     return;
   }
 
+  if (joinRequested_ && !joinStarted_) {
+    status_.lastEvent = "join_starting";
+    status_.lastError = "";
+    Serial.println("[lorawan] starting join");
+    LoRaWAN.join();
+    joinStarted_ = true;
+    deviceState = DEVICE_STATE_SLEEP;
+    status_.joining = true;
+    status_.lastJoinAttemptMs = millis();
+    status_.lastEvent = "joining";
+  }
+
   Mcu.timerhandler();
   Radio.IrqProcess();
   refreshJoinState();
@@ -171,10 +183,6 @@ bool LoRaWanClient::requestJoin(String &error) {
     return false;
   }
 
-  if (!ensureInitialized(error)) {
-    return false;
-  }
-
   refreshJoinState();
   if (status_.joined) {
     status_.lastEvent = "already_joined";
@@ -183,14 +191,16 @@ bool LoRaWanClient::requestJoin(String &error) {
   }
 
   joinRequested_ = true;
-  if (!joinStarted_) {
-    LoRaWAN.join();
-    joinStarted_ = true;
-    deviceState = DEVICE_STATE_SLEEP;
-    status_.joining = true;
-    status_.lastJoinAttemptMs = millis();
+  status_.joining = true;
+  status_.lastError = "";
+  if (joinStarted_) {
     status_.lastEvent = "joining";
-    status_.lastError = "";
+  } else if (!hardwareReady_) {
+    status_.lastEvent = "join_queued_hardware";
+  } else if (!initialized_) {
+    status_.lastEvent = "join_queued_init";
+  } else {
+    status_.lastEvent = "join_queued_start";
   }
 
   return true;
@@ -316,12 +326,17 @@ bool LoRaWanClient::ensureInitialized(String &error) {
     return false;
   }
 
+  status_.lastEvent = "lorawan_config_apply";
   if (!applyCurrentConfig(error)) {
+    status_.lastEvent = "lorawan_config_failed";
     return false;
   }
 
+  status_.lastEvent = "lorawan_mac_init";
+  Serial.println("[lorawan] LoRaWAN.init enter");
   LoRaWAN.init(loraWanClass, loraWanRegion);
   LoRaWAN.setDefaultDR(state_.snapshot().loRaWan.defaultDataRate);
+  Serial.println("[lorawan] LoRaWAN.init ok");
 
   initialized_ = true;
   status_.initialized = true;
@@ -337,24 +352,36 @@ bool LoRaWanClient::ensureHardwareReady(String &error) {
 
   if (!state_.snapshot().heltecLicense.hasLicense) {
     error = "Heltec vendor license is missing; set it with set_heltec_license before join_lorawan";
+    status_.lastEvent = "hw_license_missing";
     status_.lastError = error;
     return false;
   }
 
+  status_.lastEvent = "hw_license_apply";
+  Serial.println("[lorawan] applying Heltec license");
   applyStoredLicense(state_.snapshot().heltecLicense);
   unsigned long *vendorLicense = reinterpret_cast<unsigned long *>(storedlicense);
+  status_.lastEvent = "hw_license_check";
+  Serial.println("[lorawan] validating Heltec license");
   if (calRTC(vendorLicense) != 1) {
     error = "Heltec vendor license is invalid for this board chip ID";
+    status_.lastEvent = "hw_license_invalid";
     status_.lastError = error;
     return false;
   }
 
+  status_.lastEvent = "hw_license_write";
+  Serial.println("[lorawan] writing Heltec license");
   getLicenseAddress(HELTEC_BOARD);
   writelicense(vendorLicense, HELTEC_BOARD);
+  status_.lastEvent = "hw_mcu_begin";
+  Serial.println("[lorawan] Mcu.begin enter");
   Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
+  Serial.println("[lorawan] Mcu.begin ok");
   hardwareReady_ = true;
   status_.hardwareReady = true;
   g_activeClient = this;
+  status_.lastEvent = "hw_ready";
   status_.lastError = "";
   return true;
 }
@@ -476,6 +503,7 @@ void LoRaWanClient::refreshJoinState() {
 
   if (status_.joined) {
     joinRequested_ = false;
+    joinStarted_ = false;
   }
 }
 
