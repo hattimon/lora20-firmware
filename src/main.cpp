@@ -275,8 +275,9 @@ bool probeDisplayAddress(uint8_t address, uint32_t i2cFreq) {
 
 void applyDisplayBrightness() {
   if (Heltec.display == nullptr) return;
-  Heltec.display->setContrast(255);
-  Heltec.display->setBrightness(255);
+  Heltec.display->setContrast(255, 0xF1, 0x40);
+  Heltec.display->normalDisplay();
+  Heltec.display->displayOn();
 }
 
 bool tryInitDisplay(uint8_t address, uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) {
