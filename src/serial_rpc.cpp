@@ -52,7 +52,7 @@ void SerialRpcServer::poll() {
 void SerialRpcServer::handleLine(const String &line) {
   lastActivityMs_ = millis();
   String response;
-  if (!processor_.handleLine(line, response, false)) {
+  if (!processor_.handleLine(line, response, false, lora20::RpcTransport::kSerial)) {
     return;
   }
   if (response.length() > 0) {

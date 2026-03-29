@@ -296,7 +296,7 @@ void WifiBridge::handleRpc() {
   lastActivityMs_ = millis();
   const String body = injectAuthTokenIfMissing(server_.arg("plain"));
   String response;
-  if (!processor_.handleLine(body, response, true)) {
+  if (!processor_.handleLine(body, response, true, lora20::RpcTransport::kWifi)) {
     DynamicJsonDocument fallback(256);
     fallback["ok"] = false;
     JsonObject error = fallback.createNestedObject("error");

@@ -71,6 +71,7 @@ void BleBridge::begin() {
   }
   initialized_ = true;
   BLEDevice::init(buildBleName().c_str());
+  BLEDevice::setMTU(247);
   server_ = BLEDevice::createServer();
   server_->setCallbacks(new BleServerCallbacks(*this));
 
@@ -146,7 +147,7 @@ void BleBridge::handleRxChunk(const std::string &value) {
     rxBuffer_ = rxBuffer_.substring(newlineIndex + 1);
 
     String response;
-    if (processor_.handleLine(line, response, true)) {
+    if (processor_.handleLine(line, response, true, lora20::RpcTransport::kBle)) {
       sendLine(response + "\n");
     }
 
@@ -166,7 +167,7 @@ void BleBridge::sendLine(const String &line) {
     const size_t chunk = length - offset > kChunkSize ? kChunkSize : (length - offset);
     sendChunk(data + offset, chunk);
     offset += chunk;
-    delay(12);
+    delay(20);
   }
 }
 

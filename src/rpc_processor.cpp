@@ -346,11 +346,12 @@ void RpcProcessor::buildBootEvent(String &response) {
   writeResponse(response, boot);
 }
 
-bool RpcProcessor::handleLine(const String &line, String &response, bool requireAuth) {
+bool RpcProcessor::handleLine(const String &line, String &response, bool requireAuth, RpcTransport transport) {
   response = "";
   if (line.isEmpty()) {
     return false;
   }
+  const bool compactBle = (transport == RpcTransport::kBle);
 
   if (line.length() >= kLineLimit) {
     DynamicJsonDocument responseDoc(256);
@@ -453,17 +454,92 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
       result["flashSize"] = ESP.getFlashChipSize();
       result["freeHeap"] = ESP.getFreeHeap();
       result["uptimeMs"] = millis();
-      writeSnapshot(result.createNestedObject("device"), state_.snapshot());
-      writeLoRaWanStatus(result.createNestedObject("lorawanRuntime"), lorawan_.status());
+      const auto &snapshot = state_.snapshot();
+      const auto &runtime = lorawan_.status();
+      JsonObject device = result.createNestedObject("device");
+      if (compactBle) {
+        device["hasKey"] = snapshot.hasKey;
+        device["deviceId"] = snapshot.hasKey ? lora20::toHex(snapshot.deviceId) : "";
+        device["publicKeyHex"] = snapshot.hasKey ? lora20::toHex(snapshot.publicKey) : "";
+        device["nextNonce"] = snapshot.nextNonce;
+        device["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
+        writeConnectionConfig(device.createNestedObject("connection"), snapshot.connection);
+        JsonObject config = device.createNestedObject("config");
+        config["autoMintEnabled"] = snapshot.config.autoMintEnabled;
+        config["autoMintIntervalSeconds"] = snapshot.config.autoMintIntervalSeconds;
+        config["defaultTick"] = lora20::tickToString(snapshot.config.defaultTick);
+        config["defaultMintAmount"] = u64ToString(snapshot.config.defaultMintAmount);
+        config["schedulerMode"] = "round_robin";
+        config["profileCount"] = snapshot.config.mintProfiles.size();
+      } else {
+        writeSnapshot(device, snapshot);
+      }
+
+      JsonObject runtimeJson = result.createNestedObject("lorawanRuntime");
+      if (compactBle) {
+        runtimeJson["hardwareReady"] = runtime.hardwareReady;
+        runtimeJson["initialized"] = runtime.initialized;
+        runtimeJson["configured"] = runtime.configured;
+        runtimeJson["joining"] = runtime.joining;
+        runtimeJson["joined"] = runtime.joined;
+        runtimeJson["queuePending"] = runtime.queuePending;
+        runtimeJson["region"] = runtime.region;
+        runtimeJson["chipIdHex"] = runtime.chipIdHex;
+        runtimeJson["lastEvent"] = runtime.lastEvent;
+        runtimeJson["lastError"] = runtime.lastError;
+      } else {
+        writeLoRaWanStatus(runtimeJson, runtime);
+      }
     });
     return true;
   }
 
   if (strcmp(command, "get_lorawan") == 0) {
     sendSuccess([&](JsonObject result) {
-      writeLoRaWanConfig(result.createNestedObject("config"), state_.snapshot().loRaWan);
-      writeLoRaWanStatus(result.createNestedObject("runtime"), lorawan_.status());
-      writeHeltecLicense(result.createNestedObject("heltec"), state_.snapshot().heltecLicense, lorawan_.status());
+      const auto &snapshot = state_.snapshot();
+      const auto &runtime = lorawan_.status();
+      JsonObject config = result.createNestedObject("config");
+      if (compactBle) {
+        config["autoDevEui"] = snapshot.loRaWan.autoDevEui;
+        config["adr"] = snapshot.loRaWan.adr;
+        config["confirmedUplink"] = snapshot.loRaWan.confirmedUplink;
+        config["appPort"] = snapshot.loRaWan.appPort;
+        config["defaultDataRate"] = snapshot.loRaWan.defaultDataRate;
+        config["hasDevEui"] = snapshot.loRaWan.hasDevEui;
+        config["hasJoinEui"] = snapshot.loRaWan.hasJoinEui;
+        config["hasAppKey"] = snapshot.loRaWan.hasAppKey;
+        config["devEuiHex"] = snapshot.loRaWan.hasDevEui ? lora20::toHex(snapshot.loRaWan.devEui) : "";
+        config["joinEuiHex"] = snapshot.loRaWan.hasJoinEui ? lora20::toHex(snapshot.loRaWan.joinEui) : "";
+        config["appKeyHex"] = snapshot.loRaWan.hasAppKey ? lora20::toHex(snapshot.loRaWan.appKey) : "";
+      } else {
+        writeLoRaWanConfig(config, snapshot.loRaWan);
+      }
+
+      JsonObject runtimeJson = result.createNestedObject("runtime");
+      if (compactBle) {
+        runtimeJson["hardwareReady"] = runtime.hardwareReady;
+        runtimeJson["initialized"] = runtime.initialized;
+        runtimeJson["configured"] = runtime.configured;
+        runtimeJson["joining"] = runtime.joining;
+        runtimeJson["joined"] = runtime.joined;
+        runtimeJson["queuePending"] = runtime.queuePending;
+        runtimeJson["activePort"] = runtime.activePort;
+        runtimeJson["lastJoinAttemptMs"] = runtime.lastJoinAttemptMs;
+        runtimeJson["region"] = runtime.region;
+        runtimeJson["chipIdHex"] = runtime.chipIdHex;
+        runtimeJson["lastEvent"] = runtime.lastEvent;
+        runtimeJson["lastError"] = runtime.lastError;
+      } else {
+        writeLoRaWanStatus(runtimeJson, runtime);
+      }
+
+      JsonObject heltecJson = result.createNestedObject("heltec");
+      if (compactBle) {
+        heltecJson["hasLicense"] = snapshot.heltecLicense.hasLicense;
+        heltecJson["chipIdHex"] = runtime.chipIdHex;
+      } else {
+        writeHeltecLicense(heltecJson, snapshot.heltecLicense, runtime);
+      }
     });
     return true;
   }
