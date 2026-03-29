@@ -261,13 +261,15 @@ void writeSnapshot(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
   target["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
 }
 
-void writePreparedPayload(JsonObject target, const lora20::PreparedPayload &prepared) {
+void writePreparedPayload(JsonObject target, const lora20::PreparedPayload &prepared, bool compact = false) {
   target["nonce"] = prepared.nonce;
   target["committed"] = prepared.committed;
-  target["unsignedPayloadHex"] = lora20::toHex(prepared.unsignedPayload);
-  target["signatureHex"] = lora20::toHex(prepared.signature);
   target["payloadHex"] = lora20::toHex(prepared.payload);
   target["payloadSize"] = prepared.payload.size();
+  if (!compact) {
+    target["unsignedPayloadHex"] = lora20::toHex(prepared.unsignedPayload);
+    target["signatureHex"] = lora20::toHex(prepared.signature);
+  }
 }
 
 bool readUint64Param(JsonVariantConst value, uint64_t &out) {
@@ -1019,7 +1021,7 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
     }
 
     sendSuccess([&](JsonObject result) {
-      writePreparedPayload(result, prepared);
+      writePreparedPayload(result, prepared, compactBle);
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
     return true;
@@ -1058,7 +1060,7 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
     }
 
     sendSuccess([&](JsonObject result) {
-      writePreparedPayload(result, prepared);
+      writePreparedPayload(result, prepared, compactBle);
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
     return true;
@@ -1109,7 +1111,7 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
     }
 
     sendSuccess([&](JsonObject result) {
-      writePreparedPayload(result, prepared);
+      writePreparedPayload(result, prepared, compactBle);
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
     return true;
@@ -1144,7 +1146,7 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
     }
 
     sendSuccess([&](JsonObject result) {
-      writePreparedPayload(result, prepared);
+      writePreparedPayload(result, prepared, compactBle);
       writeConfig(result.createNestedObject("deviceConfig"), state_.snapshot().config);
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
