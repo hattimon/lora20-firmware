@@ -899,10 +899,13 @@ void applyConnectivityPolicy() {
 
   bool enableBle = false;
   bool enableWifi = false;
+  const bool bleClientConnected = g_bleBridge.connected();
   switch (connection.mode) {
     case lora20::ConnectionMode::kUsb:
       enableBle = true;
-      enableWifi = wifiConfigured;
+      // Prefer BLE link stability in USB mode: when a BLE client is connected,
+      // temporarily suspend Wi-Fi to avoid ESP32-S3 coexistence edge cases.
+      enableWifi = wifiConfigured && !bleClientConnected;
       break;
     case lora20::ConnectionMode::kBle:
       enableBle = true;

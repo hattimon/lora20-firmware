@@ -155,20 +155,23 @@ void BleBridge::handleRxChunk(const std::string &value) {
 }
 
 void BleBridge::sendLine(const String &line) {
-  if (!tx_) return;
+  if (!tx_ || !enabled_ || !connected_) return;
   const size_t length = line.length();
   const uint8_t *data = reinterpret_cast<const uint8_t *>(line.c_str());
   size_t offset = 0;
   while (offset < length) {
+    if (!connected_) {
+      break;
+    }
     const size_t chunk = length - offset > kChunkSize ? kChunkSize : (length - offset);
     sendChunk(data + offset, chunk);
     offset += chunk;
-    delay(5);
+    delay(12);
   }
 }
 
 void BleBridge::sendChunk(const uint8_t *data, size_t length) {
-  if (!tx_) return;
+  if (!tx_ || !enabled_ || !connected_) return;
   tx_->setValue(const_cast<uint8_t *>(data), length);
   tx_->notify();
 }
