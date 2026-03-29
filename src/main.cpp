@@ -273,6 +273,12 @@ bool probeDisplayAddress(uint8_t address, uint32_t i2cFreq) {
   return Wire.endTransmission() == 0;
 }
 
+void applyDisplayBrightness() {
+  if (Heltec.display == nullptr) return;
+  Heltec.display->setContrast(255);
+  Heltec.display->setBrightness(255);
+}
+
 bool tryInitDisplay(uint8_t address, uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) {
   hardResetDisplay(rstPin);
   const bool probeOk = probeDisplayAddress(address, i2cFreq);
@@ -306,6 +312,7 @@ bool tryInitDisplay(uint8_t address, uint32_t i2cFreq, int8_t rstPin, DISPLAY_GE
   Heltec.display = candidate;
   Heltec.display->clear();
   Heltec.display->setFont(ArialMT_Plain_10);
+  applyDisplayBrightness();
   Heltec.display->displayOn();
   Heltec.display->drawString(0, 0, "LORA20 boot");
   Heltec.display->drawString(0, 12, String("OLED 0x") + String(address, HEX));
@@ -339,6 +346,7 @@ void wakeDisplay() {
   if (g_displaySleeping) {
     Heltec.display->displayOn();
   }
+  applyDisplayBrightness();
   g_displaySleeping = false;
 }
 
@@ -1013,6 +1021,7 @@ void setup() {
     Heltec.display->init();
     Heltec.display->clear();
     Heltec.display->setFont(ArialMT_Plain_10);
+    applyDisplayBrightness();
     Heltec.display->displayOn();
     Heltec.display->display();
     g_displayReady = true;
