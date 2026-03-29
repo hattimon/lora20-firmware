@@ -551,6 +551,9 @@ void updateDisplay() {
   const String wifiIp = g_wifiBridge.ipAddress();
 
   Heltec.display->clear();
+  Heltec.display->setColor(WHITE);
+  Heltec.display->fillRect(0, 0, 128, 64);
+  Heltec.display->setColor(BLACK);
   Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
   Heltec.display->setFont(ArialMT_Plain_10);
 
@@ -625,13 +628,15 @@ void updateDisplay() {
     const uint8_t count = menuItemCount(g_displayScreen);
     if (count > 0) {
       g_menuIndex %= count;
-      Heltec.display->fillRect(0, 52, 128, 12);
       Heltec.display->setColor(BLACK);
-      Heltec.display->drawString(2, 53, truncateText("> " + menuItemLabel(g_displayScreen), 20));
+      Heltec.display->fillRect(0, 52, 128, 12);
       Heltec.display->setColor(WHITE);
+      Heltec.display->drawString(2, 53, truncateText("> " + menuItemLabel(g_displayScreen), 20));
+      Heltec.display->setColor(BLACK);
     }
   }
 
+  Heltec.display->setColor(WHITE);
   Heltec.display->display();
 }
 
