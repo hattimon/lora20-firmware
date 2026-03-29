@@ -462,10 +462,8 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
       if (compactBle) {
         device["hasKey"] = snapshot.hasKey;
         device["deviceId"] = snapshot.hasKey ? lora20::toHex(snapshot.deviceId) : "";
-        device["publicKeyHex"] = snapshot.hasKey ? lora20::toHex(snapshot.publicKey) : "";
         device["nextNonce"] = snapshot.nextNonce;
         device["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
-        writeConnectionConfig(device.createNestedObject("connection"), snapshot.connection);
         JsonObject config = device.createNestedObject("config");
         config["autoMintEnabled"] = snapshot.config.autoMintEnabled;
         config["autoMintIntervalSeconds"] = snapshot.config.autoMintIntervalSeconds;
@@ -512,7 +510,6 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
         config["hasAppKey"] = snapshot.loRaWan.hasAppKey;
         config["devEuiHex"] = snapshot.loRaWan.hasDevEui ? lora20::toHex(snapshot.loRaWan.devEui) : "";
         config["joinEuiHex"] = snapshot.loRaWan.hasJoinEui ? lora20::toHex(snapshot.loRaWan.joinEui) : "";
-        config["appKeyHex"] = snapshot.loRaWan.hasAppKey ? lora20::toHex(snapshot.loRaWan.appKey) : "";
       } else {
         writeLoRaWanConfig(config, snapshot.loRaWan);
       }

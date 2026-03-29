@@ -5,7 +5,7 @@
 constexpr const char *kServiceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr const char *kRxUuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 constexpr const char *kTxUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
-constexpr size_t kChunkSize = 20;
+constexpr size_t kChunkSize = 96;
 
 namespace lora20 {
 
@@ -167,7 +167,7 @@ void BleBridge::sendLine(const String &line) {
     const size_t chunk = length - offset > kChunkSize ? kChunkSize : (length - offset);
     sendChunk(data + offset, chunk);
     offset += chunk;
-    delay(20);
+    delay(30);
   }
 }
 
