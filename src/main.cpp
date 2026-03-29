@@ -81,7 +81,7 @@ enum class UiMode : uint8_t {
 
 bool g_displayReady = false;
 bool g_displaySleeping = false;
-DisplayScreen g_displayScreen = DisplayScreen::kMintStream;
+DisplayScreen g_displayScreen = DisplayScreen::kConnectivity;
 UiMode g_uiMode = UiMode::kView;
 uint8_t g_menuIndex = 0;
 size_t g_profileMenuIndex = 0;
@@ -569,30 +569,26 @@ void updateDisplay() {
   Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
   Heltec.display->setColor(WHITE);
   Heltec.display->drawHorizontalLine(0, 13, 128);
+  Heltec.display->setFont(ArialMT_Plain_16);
 
   if (g_displayScreen == DisplayScreen::kMintStream) {
-    Heltec.display->drawString(0, 14, "Mint stream");
+    Heltec.display->drawString(0, 16, "Mint stream");
     if (g_deviceEvents.empty()) {
-      Heltec.display->drawString(0, 28, "No mint events");
+      Heltec.display->drawString(0, 36, "No mints");
     } else {
-      const size_t visible = std::min<size_t>(3, g_deviceEvents.size());
-      for (size_t line = 0; line < visible; ++line) {
-        const auto &evt = g_deviceEvents[line];
-        String row = truncateText(evt.label, 18);
-        if (line == 0 && evt.nonce != 0) {
-          row += " n";
-          row += String(evt.nonce);
-        }
-        Heltec.display->drawString(0, 28 + static_cast<int>(line) * 12, row);
-      }
+      const auto &evt = g_deviceEvents.front();
+      Heltec.display->drawString(0, 36, truncateText(evt.label, 12));
+      Heltec.display->setFont(ArialMT_Plain_10);
+      Heltec.display->drawString(0, 54, "nonce " + String(evt.nonce) + "  " + String(evt.payloadSize) + "B");
     }
   } else if (g_displayScreen == DisplayScreen::kAutomation) {
-    Heltec.display->drawString(0, 14, snapshot.config.autoMintEnabled ? "Automation: ON" : "Automation: OFF");
-    Heltec.display->drawString(0, 26, "Every " + String(snapshot.config.autoMintIntervalSeconds) + "s");
+    Heltec.display->drawString(0, 16, snapshot.config.autoMintEnabled ? "Auto ON" : "Auto OFF");
+    Heltec.display->drawString(0, 36, "Every " + String(snapshot.config.autoMintIntervalSeconds) + "s");
     std::vector<lora20::MintProfile> profiles;
     collectActiveAutoMintProfiles(snapshot, profiles);
     if (profiles.empty()) {
-      Heltec.display->drawString(0, 40, "No active profiles");
+      Heltec.display->setFont(ArialMT_Plain_10);
+      Heltec.display->drawString(0, 54, "No active profiles");
     } else {
       if ((nowMs - g_lastQueueScrollMs) > kQueueScrollIntervalMs) {
         g_queueScrollIndex = (g_queueScrollIndex + 1) % profiles.size();
@@ -600,30 +596,30 @@ void updateDisplay() {
       }
       const size_t index = g_queueScrollIndex % profiles.size();
       const auto &profile = profiles[index];
-      Heltec.display->drawString(0, 40, truncateText("Queue: " + lora20::tickToString(profile.tick) + " " + mintAmountToString(profile.amount), 20));
-      Heltec.display->drawString(0, 52, "idx " + String(index + 1) + "/" + String(profiles.size()));
+      Heltec.display->setFont(ArialMT_Plain_10);
+      Heltec.display->drawString(0, 54, truncateText(lora20::tickToString(profile.tick) + " " + mintAmountToString(profile.amount), 20));
     }
   } else if (g_displayScreen == DisplayScreen::kLastEvent) {
     if (!g_deviceEvents.empty()) {
       const auto &evt = g_deviceEvents.front();
-      Heltec.display->drawString(0, 14, truncateText(evt.label, 20));
-      Heltec.display->drawString(0, 28, "nonce " + String(evt.nonce));
-      Heltec.display->drawString(0, 40, "payload " + String(evt.payloadSize) + "B");
-      Heltec.display->drawString(0, 52, formatEventTime(evt.timestamp));
+      Heltec.display->drawString(0, 16, truncateText(evt.label, 12));
+      Heltec.display->drawString(0, 36, String(evt.payloadSize) + "B");
+      Heltec.display->setFont(ArialMT_Plain_10);
+      Heltec.display->drawString(0, 54, "nonce " + String(evt.nonce));
     } else {
-      Heltec.display->drawString(0, 24, "No recent events");
-      Heltec.display->drawString(0, 38, runtime.joined ? "LoRa joined" : "LoRa offline");
+      Heltec.display->drawString(0, 16, "No events");
+      Heltec.display->drawString(0, 36, runtime.joined ? "LoRa OK" : "LoRa idle");
     }
   } else {
-    Heltec.display->drawString(0, 14, "Conn: " + connectionModeLabel(snapshot.connection.mode));
+    Heltec.display->drawString(0, 16, runtime.joined ? "LoRa joined" : "LoRa idle");
+    Heltec.display->drawString(0, 36, connectionModeLabel(snapshot.connection.mode) + " " + wifiMode);
+    Heltec.display->setFont(ArialMT_Plain_10);
     if (wifiIp.length() > 0) {
-      Heltec.display->drawString(0, 26, truncateText("IP " + wifiIp, 20));
+      Heltec.display->drawString(0, 54, truncateText("IP " + wifiIp, 20));
     } else {
-      Heltec.display->drawString(0, 26, "WiFi " + wifiMode);
+      const unsigned long remainingMs = nowMs < g_bridgeWindowUntilMs ? (g_bridgeWindowUntilMs - nowMs) : 0;
+      Heltec.display->drawString(0, 54, "Links " + String(remainingMs / 1000) + "s  PWR L" + String(snapshot.connection.powerSaveLevel));
     }
-    const unsigned long remainingMs = nowMs < g_bridgeWindowUntilMs ? (g_bridgeWindowUntilMs - nowMs) : 0;
-    Heltec.display->drawString(0, 38, "Links " + String(remainingMs / 1000) + "s");
-    Heltec.display->drawString(0, 50, "PWR L" + String(snapshot.connection.powerSaveLevel));
   }
 
   if (g_uiMode == UiMode::kMenu) {
@@ -633,6 +629,7 @@ void updateDisplay() {
       Heltec.display->setColor(BLACK);
       Heltec.display->fillRect(0, 52, 128, 12);
       Heltec.display->setColor(WHITE);
+      Heltec.display->setFont(ArialMT_Plain_10);
       Heltec.display->drawString(2, 53, truncateText("> " + menuItemLabel(g_displayScreen), 20));
       Heltec.display->setColor(BLACK);
     }
