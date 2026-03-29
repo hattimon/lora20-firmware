@@ -254,14 +254,43 @@ String connectionModeLabel(lora20::ConnectionMode mode) {
   }
 }
 
-bool tryInitDisplay(uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) {
-  SSD1306Wire *candidate = new SSD1306Wire(0x3c, i2cFreq, SDA_OLED, SCL_OLED, geometry, rstPin);
+void hardResetDisplay(int8_t rstPin) {
+  if (rstPin < 0) return;
+  pinMode(rstPin, OUTPUT);
+  digitalWrite(rstPin, HIGH);
+  delay(10);
+  digitalWrite(rstPin, LOW);
+  delay(10);
+  digitalWrite(rstPin, HIGH);
+  delay(20);
+}
+
+bool probeDisplayAddress(uint8_t address, uint32_t i2cFreq) {
+  Wire.end();
+  delay(4);
+  Wire.begin(SDA_OLED, SCL_OLED, i2cFreq);
+  Wire.beginTransmission(address);
+  return Wire.endTransmission() == 0;
+}
+
+bool tryInitDisplay(uint8_t address, uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) {
+  hardResetDisplay(rstPin);
+  const bool probeOk = probeDisplayAddress(address, i2cFreq);
+  Serial.printf("[display] probe addr=0x%02x freq=%lu rst=%d geom=%d result=%s\n",
+                static_cast<unsigned>(address),
+                static_cast<unsigned long>(i2cFreq),
+                static_cast<int>(rstPin),
+                static_cast<int>(geometry),
+                probeOk ? "ok" : "miss");
+
+  SSD1306Wire *candidate = new SSD1306Wire(address, i2cFreq, SDA_OLED, SCL_OLED, geometry, rstPin);
   if (candidate == nullptr) {
     Serial.println("[display] allocation failed");
     return false;
   }
   if (!candidate->init()) {
-    Serial.printf("[display] init failed freq=%lu rst=%d geom=%d\n",
+    Serial.printf("[display] init failed addr=0x%02x freq=%lu rst=%d geom=%d\n",
+                  static_cast<unsigned>(address),
                   static_cast<unsigned long>(i2cFreq),
                   static_cast<int>(rstPin),
                   static_cast<int>(geometry));
@@ -269,7 +298,8 @@ bool tryInitDisplay(uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) 
     return false;
   }
 
-  Serial.printf("[display] init ok freq=%lu rst=%d geom=%d\n",
+  Serial.printf("[display] init ok addr=0x%02x freq=%lu rst=%d geom=%d\n",
+                static_cast<unsigned>(address),
                 static_cast<unsigned long>(i2cFreq),
                 static_cast<int>(rstPin),
                 static_cast<int>(geometry));
@@ -278,7 +308,7 @@ bool tryInitDisplay(uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry) 
   Heltec.display->setFont(ArialMT_Plain_10);
   Heltec.display->displayOn();
   Heltec.display->drawString(0, 0, "LORA20 boot");
-  Heltec.display->drawString(0, 12, String("OLED ") + String(i2cFreq) + "Hz");
+  Heltec.display->drawString(0, 12, String("OLED 0x") + String(address, HEX));
   Heltec.display->display();
   return true;
 }
@@ -951,21 +981,25 @@ void setup() {
 #ifdef Heltec_Vext
   // Heltec V4 OLED power rail is controlled by Vext. Force it ON before custom display init.
   Heltec.VextON();
-  delay(50);
+  delay(150);
 #endif
 #if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
   // Force explicit OLED init with fallbacks for Heltec V4 variants.
   Heltec.display = nullptr;
+  const uint8_t addresses[] = {0x3c, 0x3d};
   const uint32_t freqs[] = {500000UL, 400000UL, 100000UL};
   const int8_t resetPins[] = {RST_OLED, -1};
   const DISPLAY_GEOMETRY geometries[] = {GEOMETRY_128_64, GEOMETRY_64_32};
-  for (const auto freq : freqs) {
-    for (const auto resetPin : resetPins) {
-      for (const auto geometry : geometries) {
-        if (tryInitDisplay(freq, resetPin, geometry)) {
-          g_displayReady = true;
-          break;
+  for (const auto address : addresses) {
+    for (const auto freq : freqs) {
+      for (const auto resetPin : resetPins) {
+        for (const auto geometry : geometries) {
+          if (tryInitDisplay(address, freq, resetPin, geometry)) {
+            g_displayReady = true;
+            break;
+          }
         }
+        if (g_displayReady) break;
       }
       if (g_displayReady) break;
     }
