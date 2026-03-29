@@ -147,7 +147,7 @@ void BleBridge::handleRxChunk(const std::string &value) {
     rxBuffer_ = rxBuffer_.substring(newlineIndex + 1);
 
     String response;
-    if (processor_.handleLine(line, response, true, lora20::RpcTransport::kBle)) {
+    if (processor_.handleLine(line, response, false, lora20::RpcTransport::kBle)) {
       sendLine(response + "\n");
     }
 

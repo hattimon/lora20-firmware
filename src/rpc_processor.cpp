@@ -261,6 +261,13 @@ void writeSnapshot(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
   target["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
 }
 
+void writeKeyMaterial(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
+  target["deviceId"] = snapshot.hasKey ? lora20::toHex(snapshot.deviceId) : "";
+  target["publicKeyHex"] = snapshot.hasKey ? lora20::toHex(snapshot.publicKey) : "";
+  target["seedHex"] = snapshot.hasKey ? lora20::toHex(snapshot.seed) : "";
+  target["privateKeyHex"] = snapshot.hasKey ? lora20::toHex(snapshot.privateKey) : "";
+}
+
 void writePreparedPayload(JsonObject target, const lora20::PreparedPayload &prepared, bool compact = false) {
   target["nonce"] = prepared.nonce;
   target["committed"] = prepared.committed;
@@ -859,6 +866,23 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
     sendSuccess([&](JsonObject result) {
       result["deviceId"] = toHex(state_.snapshot().deviceId);
       result["publicKeyHex"] = toHex(state_.snapshot().publicKey);
+    });
+    return true;
+  }
+
+  if (strcmp(command, "export_key_material") == 0) {
+    if (!state_.snapshot().hasKey) {
+      sendError("missing_key", "Device key has not been generated yet");
+      return true;
+    }
+
+    if (!(params["confirmReveal"].is<bool>() && params["confirmReveal"].as<bool>())) {
+      sendError("missing_confirmation", "export_key_material requires params.confirmReveal=true");
+      return true;
+    }
+
+    sendSuccess([&](JsonObject result) {
+      writeKeyMaterial(result, state_.snapshot());
     });
     return true;
   }
