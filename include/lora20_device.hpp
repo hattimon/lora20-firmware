@@ -18,32 +18,12 @@ constexpr uint8_t kOpTransfer = 0x03;
 constexpr uint8_t kOpConfig = 0x10;
 constexpr size_t kMaxMintProfiles = 8;
 
-enum class ConnectionMode : uint8_t {
-  kUsb = 0,
-  kBle = 1,
-  kWifi = 2
-};
-
 struct MintProfile {
   char tick[5];
   uint64_t amount = 1;
   bool enabled = true;
 
   MintProfile();
-};
-
-struct ConnectionConfig {
-  ConnectionMode mode = ConnectionMode::kUsb;
-  char wifiSsid[33];
-  char wifiPassword[65];
-  char rpcToken[65];
-  bool wifiApFallback = false;
-  uint16_t displaySleepSeconds = 60;
-  uint8_t displayBrightness = 255;
-  uint16_t bridgeWindowSeconds = 300;
-  uint8_t powerSaveLevel = 1;
-
-  ConnectionConfig();
 };
 
 struct DeviceConfig {
@@ -92,7 +72,6 @@ struct DeviceSnapshot {
   std::array<uint8_t, 64> privateKey{};
   std::array<uint8_t, 8> deviceId{};
   uint32_t nextNonce = 1;
-  ConnectionConfig connection;
   DeviceConfig config;
   LoRaWanConfig loRaWan;
   HeltecLicenseConfig heltecLicense;
@@ -118,7 +97,6 @@ class DeviceStateStore {
   bool importBackup(const BackupBlob &backup, const String &passphrase, bool overwrite, String &error);
 
   bool updateConfig(const DeviceConfig &config, String &error);
-  bool updateConnectionConfig(const ConnectionConfig &config, String &error);
   bool updateLoRaWanConfig(const LoRaWanConfig &config, String &error);
   bool updateHeltecLicense(const HeltecLicenseConfig &config, String &error);
   bool commitNonce(uint32_t usedNonce, String &error);
@@ -128,7 +106,6 @@ class DeviceStateStore {
   bool loadSnapshot(String &error);
   bool persistSeed(String &error);
   bool persistConfig(String &error);
-  bool persistConnectionConfig(String &error);
   bool persistLoRaWanConfig(String &error);
   bool persistHeltecLicense(String &error);
   bool persistNonce(String &error);
@@ -141,8 +118,6 @@ class DeviceStateStore {
 
 bool normalizeTick(const String &input, char output[5], String &error);
 String tickToString(const char tick[5]);
-String connectionModeToString(ConnectionMode mode);
-bool parseConnectionMode(const String &input, ConnectionMode &out);
 bool parseUint64(const String &text, uint64_t &value);
 bool parseUint32(const String &text, uint32_t &value);
 String toHex(const uint8_t *data, size_t length);

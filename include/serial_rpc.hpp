@@ -2,26 +2,26 @@
 
 #include <Arduino.h>
 
-#include "rpc_processor.hpp"
+#include "lora20_device.hpp"
+#include "lorawan_client.hpp"
 
 namespace lora20 {
 
 class SerialRpcServer {
  public:
-  SerialRpcServer(Stream &serial, RpcProcessor &processor);
+  SerialRpcServer(Stream &serial, DeviceStateStore &state, LoRaWanClient &lorawan);
 
   void begin();
   void poll();
-  unsigned long lastActivityMs() const;
 
  private:
   void handleLine(const String &line);
   void sendBootEvent();
 
   Stream &serial_;
-  RpcProcessor &processor_;
+  DeviceStateStore &state_;
+  LoRaWanClient &lorawan_;
   String buffer_;
-  unsigned long lastActivityMs_ = 0;
 };
 
 }  // namespace lora20
