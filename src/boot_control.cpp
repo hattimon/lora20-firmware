@@ -23,6 +23,11 @@ struct SlotDefinition {
   esp_partition_subtype_t subtype;
 };
 
+struct HoldTargetDefinition {
+  const char *shortHoldProtocol;
+  const char *longHoldProtocol;
+};
+
 constexpr SlotDefinition kSlots[] = {
     {"lora20", "lora20", ESP_PARTITION_SUBTYPE_APP_OTA_0},
     {"meshcore", "meshcore", ESP_PARTITION_SUBTYPE_APP_OTA_1},
@@ -61,6 +66,23 @@ const SlotDefinition *findSlotDefinition(const String &protocol) {
   return nullptr;
 }
 
+HoldTargetDefinition holdTargetsForProtocol(const String &protocol) {
+  const String normalized = normalizeProtocolName(protocol);
+  if (normalized == "meshcore") {
+    return {"lora20", "meshtastic"};
+  }
+  if (normalized == "meshtastic") {
+    return {"lora20", "meshcore"};
+  }
+  return {"meshcore", "meshtastic"};
+}
+
+String buildButtonHint(const String &currentProtocol) {
+  const HoldTargetDefinition targets = holdTargetsForProtocol(currentProtocol);
+  return String("Hold PRG for 3-5.9s, release to switch to ") + targets.shortHoldProtocol +
+         ". Hold for 6s+, release to switch to " + targets.longHoldProtocol;
+}
+
 String protocolFromPartition(const esp_partition_t *partition) {
   if (partition == nullptr) {
     return "";
@@ -94,9 +116,8 @@ bool BootControl::begin(String &error) {
   error = "";
   pinMode(kPrgButtonPin, INPUT_PULLUP);
   status_.supported = kTriBootBuildEnabled;
-  status_.buttonHint = kTriBootBuildEnabled
-                           ? "Hold PRG for 3s to switch to MeshCore, hold for 6s to switch to Meshtastic"
-                           : "Tri-boot is disabled in this build";
+  status_.buttonHint = kTriBootBuildEnabled ? buildButtonHint("lora20")
+                                            : "Tri-boot is disabled in this build";
   statusDirty_ = true;
   refreshStatus();
   return true;
@@ -123,14 +144,15 @@ void BootControl::poll() {
     buttonDownSinceMs_ = 0;
     buttonHintStage_ = 0;
 
+    const HoldTargetDefinition targets = holdTargetsForProtocol(status().currentProtocol);
     String error;
     if (heldMs >= kMeshtasticHoldMs) {
-      if (!switchToProtocol("meshtastic", true, error)) {
-        emitSwitchEvent("button_switch_failed", "meshtastic", error, false);
+      if (!switchToProtocol(targets.longHoldProtocol, true, error)) {
+        emitSwitchEvent("button_switch_failed", targets.longHoldProtocol, error, false);
       }
     } else if (heldMs >= kMeshCoreHoldMs) {
-      if (!switchToProtocol("meshcore", true, error)) {
-        emitSwitchEvent("button_switch_failed", "meshcore", error, false);
+      if (!switchToProtocol(targets.shortHoldProtocol, true, error)) {
+        emitSwitchEvent("button_switch_failed", targets.shortHoldProtocol, error, false);
       }
     }
     return;
@@ -141,14 +163,15 @@ void BootControl::poll() {
   }
 
   const unsigned long heldMs = nowMs - buttonDownSinceMs_;
+  const HoldTargetDefinition targets = holdTargetsForProtocol(status().currentProtocol);
   if (buttonHintStage_ == 0 && heldMs >= kMeshCoreHoldMs) {
-    emitButtonHint("meshcore", heldMs);
+    emitButtonHint(targets.shortHoldProtocol, heldMs);
     buttonHintStage_ = 1;
     return;
   }
 
   if (buttonHintStage_ == 1 && heldMs >= kMeshtasticHoldMs) {
-    emitButtonHint("meshtastic", heldMs);
+    emitButtonHint(targets.longHoldProtocol, heldMs);
     buttonHintStage_ = 2;
   }
 }
@@ -213,6 +236,8 @@ void BootControl::refreshStatus() {
   status_.bootProtocol = "";
   status_.runningPartitionLabel = "";
   status_.bootPartitionLabel = "";
+  status_.buttonHint = kTriBootBuildEnabled ? buildButtonHint("lora20")
+                                            : "Tri-boot is disabled in this build";
 
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *boot = esp_ota_get_boot_partition();
@@ -220,6 +245,7 @@ void BootControl::refreshStatus() {
   if (running != nullptr) {
     status_.currentProtocol = protocolFromPartition(running);
     status_.runningPartitionLabel = String(running->label);
+    status_.buttonHint = buildButtonHint(status_.currentProtocol);
   }
   if (boot != nullptr) {
     status_.bootProtocol = protocolFromPartition(boot);
