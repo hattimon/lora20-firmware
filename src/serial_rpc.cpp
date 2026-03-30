@@ -27,6 +27,13 @@ void writeProfiles(JsonArray target, const std::vector<lora20::MintProfile> &pro
 bool readUint64Param(JsonVariantConst value, uint64_t &out);
 bool readUint32Param(JsonVariantConst value, uint32_t &out);
 
+int hexNibble(char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
 const char *resolveCommand(JsonDocument &request) {
   if (request["command"].is<const char *>()) {
     return request["command"].as<const char *>();
@@ -291,6 +298,44 @@ bool readHexArrayParam(JsonVariantConst value, std::array<uint8_t, N> &out, bool
   }
 
   hasValue = true;
+  return true;
+}
+
+bool readHexVectorParam(JsonVariantConst value, size_t maxBytes, std::vector<uint8_t> &out, String &error) {
+  if (!value.is<const char *>()) {
+    error = "messageHex must be a hex string";
+    return false;
+  }
+
+  const String hex = value.as<const char *>();
+  if (hex.length() == 0) {
+    error = "messageHex must not be empty";
+    return false;
+  }
+  if ((hex.length() % 2) != 0) {
+    error = "messageHex must have an even number of characters";
+    return false;
+  }
+
+  const size_t byteCount = hex.length() / 2;
+  if (byteCount > maxBytes) {
+    error = "messageHex exceeds the maximum packed size";
+    return false;
+  }
+
+  out.clear();
+  out.reserve(byteCount);
+  for (size_t index = 0; index < hex.length(); index += 2) {
+    const int high = hexNibble(hex[index]);
+    const int low = hexNibble(hex[index + 1]);
+    if (high < 0 || low < 0) {
+      error = "messageHex contains a non-hex character";
+      out.clear();
+      return false;
+    }
+    out.push_back(static_cast<uint8_t>((high << 4) | low));
+  }
+
   return true;
 }
 
@@ -883,6 +928,54 @@ void SerialRpcServer::handleLine(const String &line) {
 
     sendSuccess([&](JsonObject result) {
       writePreparedPayload(result, prepared);
+      result["nextNonce"] = state_.snapshot().nextNonce;
+    });
+    return;
+  }
+
+  if (strcmp(command, "prepare_message") == 0) {
+    if (!params["toDeviceId"].is<const char *>()) {
+      sendError("missing_recipient", "prepare_message requires toDeviceId");
+      return;
+    }
+
+    uint32_t rawMessageLength = 0;
+    if (!readUint32Param(params["messageLength"], rawMessageLength) || rawMessageLength == 0 || rawMessageLength > 32) {
+      sendError("invalid_message_length", "messageLength must be between 1 and 32");
+      return;
+    }
+
+    std::vector<uint8_t> packedMessage;
+    String error;
+    if (!readHexVectorParam(params["messageHex"], 24, packedMessage, error)) {
+      sendError("invalid_message_hex", error);
+      return;
+    }
+
+    PreparedPayload prepared;
+    const uint32_t nonce = state_.snapshot().nextNonce;
+    if (!buildMessagePayload(
+            state_.snapshot(),
+            String(params["toDeviceId"].as<const char *>()),
+            static_cast<uint8_t>(rawMessageLength),
+            packedMessage,
+            nonce,
+            prepared,
+            error)) {
+      sendError("prepare_message_failed", error);
+      return;
+    }
+
+    prepared.committed = params["commit"] | false;
+    if (prepared.committed && !state_.commitNonce(nonce, error)) {
+      sendError("commit_failed", error);
+      return;
+    }
+
+    sendSuccess([&](JsonObject result) {
+      writePreparedPayload(result, prepared);
+      result["messageLength"] = rawMessageLength;
+      result["packedSize"] = packedMessage.size();
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
     return;

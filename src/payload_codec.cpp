@@ -132,6 +132,52 @@ bool buildTransferPayload(const DeviceSnapshot &snapshot,
   return finalizePreparedPayload(snapshot, prepared, error);
 }
 
+bool buildMessagePayload(const DeviceSnapshot &snapshot,
+                         const String &recipientDeviceIdHex,
+                         uint8_t messageLength,
+                         const std::vector<uint8_t> &packedMessage,
+                         uint32_t nonce,
+                         PreparedPayload &prepared,
+                         String &error) {
+  if (!snapshot.hasKey) {
+    error = "Device key is not initialized";
+    return false;
+  }
+  if (messageLength == 0) {
+    error = "messageLength must be greater than zero";
+    return false;
+  }
+  if (packedMessage.empty()) {
+    error = "packedMessage must not be empty";
+    return false;
+  }
+  const size_t expectedPackedBytes = (static_cast<size_t>(messageLength) * 6 + 7) / 8;
+  if (packedMessage.size() != expectedPackedBytes) {
+    error = "packedMessage size does not match messageLength";
+    return false;
+  }
+  if (packedMessage.size() > 24) {
+    error = "packedMessage exceeds the 24-byte limit";
+    return false;
+  }
+
+  std::array<uint8_t, 8> recipient{};
+  if (!hexToBytes(recipientDeviceIdHex, recipient.data(), recipient.size())) {
+    error = "toDeviceId must be exactly 16 hex characters";
+    return false;
+  }
+
+  prepared = PreparedPayload();
+  prepared.nonce = nonce;
+  prepared.unsignedPayload.reserve(1 + recipient.size() + 4 + 1 + packedMessage.size());
+  prepared.unsignedPayload.push_back(kOpMessage);
+  prepared.unsignedPayload.insert(prepared.unsignedPayload.end(), recipient.begin(), recipient.end());
+  appendUint32BE(prepared.unsignedPayload, nonce);
+  prepared.unsignedPayload.push_back(messageLength);
+  prepared.unsignedPayload.insert(prepared.unsignedPayload.end(), packedMessage.begin(), packedMessage.end());
+  return finalizePreparedPayload(snapshot, prepared, error);
+}
+
 bool buildConfigPayload(const DeviceSnapshot &snapshot,
                         const DeviceConfig &config,
                         uint32_t nonce,

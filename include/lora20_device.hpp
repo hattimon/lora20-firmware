@@ -15,6 +15,7 @@ constexpr const char *kBackupAlgorithm = "AES-256-GCM+PBKDF2-SHA256";
 constexpr uint8_t kOpDeploy = 0x01;
 constexpr uint8_t kOpMint = 0x02;
 constexpr uint8_t kOpTransfer = 0x03;
+constexpr uint8_t kOpMessage = 0x04;
 constexpr uint8_t kOpConfig = 0x10;
 constexpr size_t kMaxMintProfiles = 8;
 
@@ -147,6 +148,14 @@ bool buildTransferPayload(const DeviceSnapshot &snapshot,
                           uint32_t nonce,
                           PreparedPayload &prepared,
                           String &error);
+
+bool buildMessagePayload(const DeviceSnapshot &snapshot,
+                         const String &recipientDeviceIdHex,
+                         uint8_t messageLength,
+                         const std::vector<uint8_t> &packedMessage,
+                         uint32_t nonce,
+                         PreparedPayload &prepared,
+                         String &error);
 
 bool buildConfigPayload(const DeviceSnapshot &snapshot,
                         const DeviceConfig &config,
