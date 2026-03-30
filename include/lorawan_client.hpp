@@ -61,7 +61,6 @@ class LoRaWanClient {
   bool ensureInitialized(String &error);
   bool ensureHardwareReady(String &error);
   bool applyCurrentConfig(String &error);
-  void abortJoinAttempt(const String &reason);
   bool isConfigured(const DeviceSnapshot &snapshot) const;
   bool trySendQueued(String &error);
   void refreshJoinState();

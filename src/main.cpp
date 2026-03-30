@@ -1169,13 +1169,9 @@ void serviceAutoMint() {
 
 void applyConnectivityPolicy() {
   const auto &connection = g_state.snapshot().connection;
-  const auto &lorawanStatus = g_lorawan.status();
   const unsigned long nowMs = millis();
   const unsigned long windowMs = static_cast<unsigned long>(std::max<uint16_t>(30, connection.bridgeWindowSeconds)) * 1000UL;
   const bool wifiConfigured = std::strlen(connection.wifiSsid) > 0 || connection.wifiApFallback;
-  const bool joiningOverUsb = connection.mode == lora20::ConnectionMode::kUsb &&
-                              lorawanStatus.joining &&
-                              !lorawanStatus.joined;
 
   const unsigned long latestActivity = std::max(
       std::max(g_rpc.lastActivityMs(), g_wifiBridge.lastActivityMs()),
@@ -1215,13 +1211,6 @@ void applyConnectivityPolicy() {
       break;
     default:
       break;
-  }
-
-  if (joiningOverUsb) {
-    // Keep USB stable, but suspend BLE/Wi-Fi chatter while the LoRaWAN stack
-    // is waiting for join-accept RX windows.
-    enableBle = false;
-    enableWifi = false;
   }
 
   g_bleBridge.setEnabled(enableBle);
