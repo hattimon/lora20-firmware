@@ -29,9 +29,9 @@ struct HoldTargetDefinition {
 };
 
 constexpr SlotDefinition kSlots[] = {
-    {"lora20", "lora20", ESP_PARTITION_SUBTYPE_APP_OTA_0},
-    {"meshcore", "meshcore", ESP_PARTITION_SUBTYPE_APP_OTA_1},
-    {"meshtastic", "meshtastic", ESP_PARTITION_SUBTYPE_APP_OTA_2},
+    {"lora20", "app0", ESP_PARTITION_SUBTYPE_APP_OTA_0},
+    {"meshcore", "app1", ESP_PARTITION_SUBTYPE_APP_OTA_1},
+    {"meshtastic", "app2", ESP_PARTITION_SUBTYPE_APP_OTA_2},
 };
 
 String partitionSubtypeName(esp_partition_subtype_t subtype) {
