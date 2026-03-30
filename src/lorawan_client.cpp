@@ -128,8 +128,18 @@ String devEuiSourceLabel(const DeviceSnapshot &snapshot) {
   return "none";
 }
 
+uint8_t effectiveJoinDataRate(const DeviceSnapshot &snapshot) {
+  // EU868 join accepts are currently the weakest part of this deployment path.
+  // Force the most robust join DR, then let ADR optimize uplinks after join.
+  if (ACTIVE_REGION == LORAMAC_REGION_EU868) {
+    return 0;
+  }
+  return snapshot.loRaWan.defaultDataRate;
+}
+
 LoRaWanClient::LoRaWanClient(DeviceStateStore &state) : state_(state) {
   status_.chipIdHex = chipIdHex();
+  status_.effectiveJoinDataRate = effectiveJoinDataRate(state_.snapshot());
   status_.effectiveDevEuiHex = effectiveDevEuiHex(state_.snapshot());
   status_.devEuiSource = devEuiSourceLabel(state_.snapshot());
 }
@@ -371,7 +381,12 @@ bool LoRaWanClient::ensureInitialized(String &error) {
   status_.lastEvent = "lorawan_mac_init";
   Serial.println("[lorawan] LoRaWAN.init enter");
   LoRaWAN.init(loraWanClass, loraWanRegion);
-  LoRaWAN.setDefaultDR(state_.snapshot().loRaWan.defaultDataRate);
+  const uint8_t joinDataRate = effectiveJoinDataRate(state_.snapshot());
+  LoRaWAN.setDefaultDR(joinDataRate);
+  status_.effectiveJoinDataRate = joinDataRate;
+  Serial.printf("[lorawan] using JoinDR=%u requestedDR=%u\r\n",
+                static_cast<unsigned>(joinDataRate),
+                static_cast<unsigned>(state_.snapshot().loRaWan.defaultDataRate));
   Serial.println("[lorawan] LoRaWAN.init ok");
 
   initialized_ = true;
@@ -459,6 +474,7 @@ bool LoRaWanClient::applyCurrentConfig(String &error) {
                 snapshot.loRaWan.adr ? 1U : 0U,
                 snapshot.loRaWan.confirmedUplink ? 1U : 0U);
   status_.region = "EU868";
+  status_.effectiveJoinDataRate = effectiveJoinDataRate(snapshot);
   status_.configured = true;
   return true;
 }
@@ -523,6 +539,7 @@ bool LoRaWanClient::trySendQueued(String &error) {
 
 void LoRaWanClient::refreshJoinState() {
   status_.chipIdHex = chipIdHex();
+  status_.effectiveJoinDataRate = effectiveJoinDataRate(state_.snapshot());
   status_.effectiveDevEuiHex = effectiveDevEuiHex(state_.snapshot());
   status_.devEuiSource = devEuiSourceLabel(state_.snapshot());
   status_.hardwareReady = hardwareReady_;
