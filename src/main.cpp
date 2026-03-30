@@ -32,7 +32,7 @@ constexpr size_t kMaxDeviceEvents = 12;
 std::vector<DeviceEvent> g_deviceEvents;
 
 constexpr uint8_t kMaxDisplayScreens = 4;
-constexpr unsigned long kDisplayRefreshMs = 500;
+constexpr unsigned long kDisplayRefreshMs = 1000;
 constexpr unsigned long kQueueScrollIntervalMs = 2000;
 constexpr unsigned long kLongPressMs = 2200;
 constexpr unsigned long kBridgeWindowDefaultMs = 300000UL;
@@ -114,6 +114,7 @@ std::vector<lora20::MintProfile> g_lastAutoMintProfiles;
 String g_lastAutoMintStage;
 String g_lastAutoMintError;
 unsigned long g_lastAutoMintEventAtMs = 0;
+uint8_t g_autoMintFailureStreak = 0;
 
 String mintAmountToString(uint64_t amount) {
   char buffer[32];
@@ -979,6 +980,33 @@ void resetAutoMintSchedule() {
   g_lastAutoMintIntervalSeconds = 0;
   g_autoMintCursor = 0;
   g_lastAutoMintProfiles.clear();
+  g_autoMintFailureStreak = 0;
+}
+
+void registerAutoMintFailure(const String &reason) {
+  if (g_autoMintFailureStreak < 255) {
+    g_autoMintFailureStreak++;
+  }
+  if (g_autoMintFailureStreak < 6) {
+    return;
+  }
+
+  auto nextConfig = g_state.snapshot().config;
+  if (!nextConfig.autoMintEnabled) {
+    return;
+  }
+  nextConfig.autoMintEnabled = false;
+  for (auto &profile : nextConfig.mintProfiles) {
+    profile.enabled = false;
+  }
+
+  String error;
+  if (!g_state.updateConfig(nextConfig, error)) {
+    pushSystemEvent("ERR auto-mint off " + error);
+    return;
+  }
+  pushSystemEvent("Auto-mint OFF fail-safe: " + truncateText(reason, 24));
+  resetAutoMintSchedule();
 }
 
 void serviceAutoMint() {
@@ -1051,6 +1079,7 @@ void serviceAutoMint() {
   if (!g_lorawan.status().joined) {
     g_lastAutoMintAttemptMs = nowMs;
     g_nextAutoMintAtMs = nowMs + 5000UL;
+    registerAutoMintFailure("radio not joined");
     emitAutoMintEvent(
         "waiting_join",
         &profile,
@@ -1068,6 +1097,7 @@ void serviceAutoMint() {
   if (!lora20::buildMintPayload(snapshot, profile.tick, profile.amount, nonce, prepared, error)) {
     g_lastAutoMintAttemptMs = nowMs;
     g_nextAutoMintAtMs = nowMs + 5000UL;
+    registerAutoMintFailure(error);
     emitAutoMintEvent(
         "prepare_failed",
         &profile,
@@ -1088,6 +1118,7 @@ void serviceAutoMint() {
                              error)) {
     g_lastAutoMintAttemptMs = nowMs;
     g_nextAutoMintAtMs = nowMs + 5000UL;
+    registerAutoMintFailure(error);
     emitAutoMintEvent(
         "queue_failed",
         &profile,
@@ -1101,6 +1132,7 @@ void serviceAutoMint() {
   }
 
   g_lastAutoMintAttemptMs = nowMs;
+  g_autoMintFailureStreak = 0;
   g_autoMintCursor = (g_autoMintCursor + 1) % activeProfiles.size();
   armAutoMintSchedule(snapshot, activeProfiles, nowMs, false);
   emitAutoMintEvent(
@@ -1142,20 +1174,18 @@ void applyConnectivityPolicy() {
 
   bool enableBle = false;
   bool enableWifi = false;
-  const bool bleClientConnected = g_bleBridge.connected();
   switch (connection.mode) {
     case lora20::ConnectionMode::kUsb:
       enableBle = true;
-      // Prefer BLE link stability in USB mode: when a BLE client is connected,
-      // temporarily suspend Wi-Fi to avoid ESP32-S3 coexistence edge cases.
-      enableWifi = wifiConfigured && !bleClientConnected;
+      enableWifi = wifiConfigured;
       break;
     case lora20::ConnectionMode::kBle:
       enableBle = true;
       enableWifi = false;
       break;
     case lora20::ConnectionMode::kWifi:
-      enableBle = true;
+      // Lightweight policy: keep Wi-Fi bridge stable by disabling BLE in Wi-Fi mode.
+      enableBle = false;
       enableWifi = wifiConfigured;
       break;
     default:
