@@ -38,20 +38,6 @@ void populateAutoDevEui(uint8_t target[8]) {
   }
 }
 
-void resolveEffectiveDevEui(const lora20::DeviceSnapshot &snapshot, uint8_t target[8]) {
-  if (snapshot.loRaWan.hasDevEui) {
-    std::memcpy(target, snapshot.loRaWan.devEui.data(), snapshot.loRaWan.devEui.size());
-    return;
-  }
-
-  if (snapshot.loRaWan.autoDevEui) {
-    populateAutoDevEui(target);
-    return;
-  }
-
-  std::memset(target, 0, 8);
-}
-
 bool isValidPort(uint8_t port) {
   return port > 0 && port < 224;
 }
@@ -108,30 +94,8 @@ extern "C" void dev_time_updated() {
 
 namespace lora20 {
 
-String effectiveDevEuiHex(const DeviceSnapshot &snapshot) {
-  if (!snapshot.loRaWan.autoDevEui && !snapshot.loRaWan.hasDevEui) {
-    return "";
-  }
-
-  uint8_t effectiveDevEui[8] = {0};
-  resolveEffectiveDevEui(snapshot, effectiveDevEui);
-  return toHex(effectiveDevEui, sizeof(effectiveDevEui));
-}
-
-String devEuiSourceLabel(const DeviceSnapshot &snapshot) {
-  if (snapshot.loRaWan.hasDevEui) {
-    return "stored";
-  }
-  if (snapshot.loRaWan.autoDevEui) {
-    return "chip";
-  }
-  return "none";
-}
-
 LoRaWanClient::LoRaWanClient(DeviceStateStore &state) : state_(state) {
   status_.chipIdHex = chipIdHex();
-  status_.effectiveDevEuiHex = effectiveDevEuiHex(state_.snapshot());
-  status_.devEuiSource = devEuiSourceLabel(state_.snapshot());
 }
 
 void LoRaWanClient::poll() {
@@ -443,21 +407,14 @@ bool LoRaWanClient::applyCurrentConfig(String &error) {
   appTxDutyCycle = 15000;
   loraWanRegion = ACTIVE_REGION;
 
-  resolveEffectiveDevEui(snapshot, devEui);
+  if (snapshot.loRaWan.autoDevEui) {
+    populateAutoDevEui(devEui);
+  } else {
+    std::memcpy(devEui, snapshot.loRaWan.devEui.data(), snapshot.loRaWan.devEui.size());
+  }
 
   std::memcpy(appEui, snapshot.loRaWan.joinEui.data(), snapshot.loRaWan.joinEui.size());
   std::memcpy(appKey, snapshot.loRaWan.appKey.data(), snapshot.loRaWan.appKey.size());
-  status_.effectiveDevEuiHex = toHex(devEui, sizeof(devEui));
-  status_.devEuiSource = devEuiSourceLabel(snapshot);
-  Serial.printf("[lorawan] using DevEUI=%s source=%s\r\n",
-                status_.effectiveDevEuiHex.c_str(),
-                status_.devEuiSource.c_str());
-  Serial.printf("[lorawan] using JoinEUI=%s appPort=%u dr=%u adr=%u confirmed=%u\r\n",
-                toHex(appEui, sizeof(appEui)).c_str(),
-                static_cast<unsigned>(appPort),
-                static_cast<unsigned>(snapshot.loRaWan.defaultDataRate),
-                snapshot.loRaWan.adr ? 1U : 0U,
-                snapshot.loRaWan.confirmedUplink ? 1U : 0U);
   status_.region = "EU868";
   status_.configured = true;
   return true;
@@ -523,8 +480,6 @@ bool LoRaWanClient::trySendQueued(String &error) {
 
 void LoRaWanClient::refreshJoinState() {
   status_.chipIdHex = chipIdHex();
-  status_.effectiveDevEuiHex = effectiveDevEuiHex(state_.snapshot());
-  status_.devEuiSource = devEuiSourceLabel(state_.snapshot());
   status_.hardwareReady = hardwareReady_;
   status_.initialized = initialized_;
   status_.configured = isConfigured(state_.snapshot());
