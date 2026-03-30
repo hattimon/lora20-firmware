@@ -13,6 +13,7 @@ extern void getLicenseAddress(unsigned char board_type);
 namespace {
 
 constexpr uint16_t kDefaultChannelsMask[6] = {0x00FF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
+constexpr uint32_t kJoinFailureWindowMs = 15000UL;
 
 lora20::LoRaWanClient *g_activeClient = nullptr;
 
@@ -87,6 +88,7 @@ uint8_t confirmedNbTrials = 1;
 bool keepNet = false;
 uint16_t userChannelsMask[6] = {0x00FF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
 LoRaMacRegion_t loraWanRegion = ACTIVE_REGION;
+extern TimerEvent_t TxNextPacketTimer;
 
 extern "C" void downLinkAckHandle() {
   if (g_activeClient != nullptr) {
@@ -187,6 +189,13 @@ void LoRaWanClient::poll() {
   Radio.IrqProcess();
   refreshJoinState();
 
+  if (joinRequested_ && joinStarted_ && !status_.joined && status_.lastJoinAttemptMs != 0) {
+    const uint32_t joinAgeMs = millis() - status_.lastJoinAttemptMs;
+    if (joinAgeMs > kJoinFailureWindowMs) {
+      abortJoinAttempt("JoinAccept not received within the expected RX window");
+    }
+  }
+
   if (status_.joined && deviceState == DEVICE_STATE_SEND && queuedPayload_.empty()) {
     deviceState = DEVICE_STATE_SLEEP;
   }
@@ -220,6 +229,17 @@ void LoRaWanClient::reset() {
   status_.lastEvent = "lorawan_reset";
   status_.lastError = "";
   deviceState = DEVICE_STATE_INIT;
+}
+
+void LoRaWanClient::abortJoinAttempt(const String &reason) {
+  TimerStop(&TxNextPacketTimer);
+  joinRequested_ = false;
+  joinStarted_ = false;
+  status_.joining = false;
+  status_.joined = false;
+  status_.lastEvent = "join_failed";
+  status_.lastError = reason;
+  deviceState = DEVICE_STATE_SLEEP;
 }
 
 bool LoRaWanClient::requestJoin(String &error, bool forceRestart) {
