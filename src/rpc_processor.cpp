@@ -357,7 +357,11 @@ void RpcProcessor::buildBootEvent(String &response) {
   boot["displayBrightness"] = snapshot.connection.displayBrightness;
   boot["autoMintEnabled"] = snapshot.config.autoMintEnabled;
   boot["autoMintProfileCount"] = snapshot.config.mintProfiles.size();
-  boot["lorawanConfigured"] = lorawan_.status().configured;
+  const bool lorawanKeysConfigured = snapshot.loRaWan.hasDevEui &&
+                                     snapshot.loRaWan.hasJoinEui &&
+                                     snapshot.loRaWan.hasAppKey;
+  boot["lorawanConfigured"] = lorawanKeysConfigured;
+  boot["lorawanRuntimeConfigured"] = lorawan_.status().configured;
   JsonObject runtime = boot.createNestedObject("lorawanRuntime");
   writeLoRaWanStatus(runtime, lorawan_.status());
   writeResponse(response, boot);
