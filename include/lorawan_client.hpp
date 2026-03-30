@@ -42,7 +42,7 @@ class LoRaWanClient {
   void poll();
   void reset();
 
-  bool requestJoin(String &error, bool forceRestart = false);
+  bool requestJoin(String &error);
   bool queueUplink(const String &payloadHex,
                    uint8_t port,
                    bool confirmed,

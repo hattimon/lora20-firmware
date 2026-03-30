@@ -222,7 +222,7 @@ void LoRaWanClient::reset() {
   deviceState = DEVICE_STATE_INIT;
 }
 
-bool LoRaWanClient::requestJoin(String &error, bool forceRestart) {
+bool LoRaWanClient::requestJoin(String &error) {
   status_.configured = isConfigured(state_.snapshot());
   if (!status_.configured) {
     error = "LoRaWAN OTAA configuration is incomplete";
@@ -232,17 +232,6 @@ bool LoRaWanClient::requestJoin(String &error, bool forceRestart) {
   refreshJoinState();
   if (status_.joined) {
     status_.lastEvent = "already_joined";
-    status_.lastError = "";
-    return true;
-  }
-
-  if (forceRestart && (joinRequested_ || joinStarted_ || initialized_ || hardwareReady_)) {
-    reset();
-    status_.configured = isConfigured(state_.snapshot());
-    status_.lastEvent = "join_restart_requested";
-    status_.lastError = "";
-  } else if (joinRequested_ || joinStarted_) {
-    status_.lastEvent = "join_already_in_progress";
     status_.lastError = "";
     return true;
   }
