@@ -66,7 +66,7 @@ constexpr uint16_t kDisplaySleepPresets[] = {60, 300, 600, 1800, 3600, 0};
 #define LORA20_BATTERY_MAX_V 4.2f
 #endif
 #ifndef LORA20_OLED_FREQ
-#define LORA20_OLED_FREQ 400000
+#define LORA20_OLED_FREQ 500000
 #endif
 
 enum class DisplayScreen : uint8_t {
@@ -98,6 +98,11 @@ unsigned long g_lastUserInteractionMs = 0;
 unsigned long g_bridgeWindowUntilMs = 0;
 unsigned long g_lastBridgeActivityMs = 0;
 bool g_timeSynced = false;
+
+#if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
+static SSD1306Wire g_primaryDisplay(0x3c, LORA20_OLED_FREQ, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
+static SSD1306Wire g_altDisplay(0x3d, LORA20_OLED_FREQ, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
+#endif
 
 void collectActiveAutoMintProfiles(const lora20::DeviceSnapshot &snapshot, std::vector<lora20::MintProfile> &profiles);
 bool g_autoMintArmed = false;
@@ -339,34 +344,39 @@ bool initDisplay() {
 #ifdef Heltec_Vext
   // Ensure OLED rail is powered before init attempts.
   Heltec.VextON();
-  delay(150);
+  delay(250);
 #endif
 #if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
   g_displayReady = false;
   Heltec.display = nullptr;
-  const uint8_t addresses[] = {0x3c, 0x3d};
-  const uint32_t freqs[] = {500000UL, 400000UL, 100000UL};
-  const int8_t resetPins[] = {RST_OLED, -1};
-  const DISPLAY_GEOMETRY geometries[] = {GEOMETRY_128_64, GEOMETRY_64_32};
-  for (const auto address : addresses) {
-    for (const auto freq : freqs) {
-      for (const auto resetPin : resetPins) {
-        for (const auto geometry : geometries) {
-          if (tryInitDisplay(address, freq, resetPin, geometry)) {
-            g_displayReady = true;
-            break;
-          }
-        }
-        if (g_displayReady) break;
-      }
-      if (g_displayReady) break;
-    }
-    if (g_displayReady) break;
+  SSD1306Wire *candidate = nullptr;
+  if (probeDisplayAddress(0x3c, LORA20_OLED_FREQ)) {
+    candidate = &g_primaryDisplay;
+  } else if (probeDisplayAddress(0x3d, LORA20_OLED_FREQ)) {
+    candidate = &g_altDisplay;
+  } else {
+    candidate = &g_primaryDisplay;
   }
-  if (!g_displayReady) {
-    Serial.println("[display] all init attempts failed");
+
+  candidate->setI2cAutoInit(true);
+  hardResetDisplay(RST_OLED);
+  if (!candidate->init()) {
+    Serial.println("[display] init failed");
+    return false;
   }
-  return g_displayReady;
+
+  Heltec.display = candidate;
+  Heltec.display->clear();
+  Heltec.display->setFont(ArialMT_Plain_10);
+  applyDisplayBrightness();
+  Heltec.display->normalDisplay();
+  Heltec.display->displayOn();
+  Heltec.display->drawString(0, 0, "LORA20 boot");
+  const uint8_t addr = (candidate == &g_altDisplay) ? 0x3d : 0x3c;
+  Heltec.display->drawString(0, 12, String("OLED 0x") + String(addr, HEX));
+  Heltec.display->display();
+  g_displayReady = true;
+  return true;
 #else
   if (Heltec.display != nullptr) {
     Heltec.display->init();
