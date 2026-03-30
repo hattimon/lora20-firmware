@@ -351,6 +351,7 @@ bool initDisplay() {
 #if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
   g_displayReady = false;
   Heltec.display = nullptr;
+  Serial.println("[display] init begin");
   SSD1306Wire *candidate = nullptr;
   if (probeDisplayAddress(0x3c, LORA20_OLED_FREQ)) {
     candidate = &g_primaryDisplay;
@@ -377,6 +378,9 @@ bool initDisplay() {
   const uint8_t addr = (candidate == &g_altDisplay) ? 0x3d : 0x3c;
   Heltec.display->drawString(0, 12, String("OLED 0x") + String(addr, HEX));
   Heltec.display->display();
+  Serial.printf("[display] init ok addr=0x%02x brightness=%u\n",
+                static_cast<unsigned>(addr),
+                static_cast<unsigned>(g_state.snapshot().connection.displayBrightness));
   g_displayReady = true;
   return true;
 #else
@@ -419,7 +423,8 @@ void applyDisplayBrightness() {
     brightness = 255;
   }
   Heltec.display->wakeup();
-  Heltec.display->setBrightness(brightness);
+  // Prefer direct contrast for SSD1306/SSD1315 readability on V4.
+  Heltec.display->setContrast(brightness, 241, 64);
   Heltec.display->normalDisplay();
   Heltec.display->displayOn();
   g_lastDisplayBrightness = requested;
@@ -1025,6 +1030,22 @@ void serviceAutoMint() {
           nowMs,
           0,
           true);
+    }
+    resetAutoMintSchedule();
+    return;
+  }
+
+  if (!g_lorawan.status().configured) {
+    auto nextConfig = snapshot.config;
+    nextConfig.autoMintEnabled = false;
+    for (auto &profile : nextConfig.mintProfiles) {
+      profile.enabled = false;
+    }
+    String error;
+    if (g_state.updateConfig(nextConfig, error)) {
+      pushSystemEvent("Auto-mint OFF (LoRa not configured)");
+    } else {
+      pushSystemEvent("ERR auto-mint off " + error);
     }
     resetAutoMintSchedule();
     return;

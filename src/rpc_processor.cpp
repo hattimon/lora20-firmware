@@ -344,12 +344,19 @@ void RpcProcessor::setWifiBridge(WifiBridge *bridge) {
 
 void RpcProcessor::buildBootEvent(String &response) {
   DynamicJsonDocument boot(1024);
+  const DeviceSnapshot snapshot = state_.snapshot();
   boot["type"] = "boot";
   boot["firmware"] = kFirmwareName;
   boot["version"] = LORA20_FW_VERSION;
-  boot["hasKey"] = state_.snapshot().hasKey;
-  boot["deviceId"] = state_.snapshot().hasKey ? toHex(state_.snapshot().deviceId) : "";
-  boot["nextNonce"] = state_.snapshot().nextNonce;
+  boot["hasKey"] = snapshot.hasKey;
+  boot["deviceId"] = snapshot.hasKey ? toHex(snapshot.deviceId) : "";
+  boot["nextNonce"] = snapshot.nextNonce;
+  boot["connectionMode"] = connectionModeToString(snapshot.connection.mode);
+  boot["wifiConfigured"] = std::strlen(snapshot.connection.wifiSsid) > 0;
+  boot["displaySleepSeconds"] = snapshot.connection.displaySleepSeconds;
+  boot["displayBrightness"] = snapshot.connection.displayBrightness;
+  boot["autoMintEnabled"] = snapshot.config.autoMintEnabled;
+  boot["autoMintProfileCount"] = snapshot.config.mintProfiles.size();
   boot["lorawanConfigured"] = lorawan_.status().configured;
   JsonObject runtime = boot.createNestedObject("lorawanRuntime");
   writeLoRaWanStatus(runtime, lorawan_.status());
