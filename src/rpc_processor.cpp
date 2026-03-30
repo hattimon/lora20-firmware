@@ -979,8 +979,9 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
   }
 
   if (strcmp(command, "join_lorawan") == 0) {
+    const bool forceRestart = params["force"] | false;
     String error;
-    if (!lorawan_.requestJoin(error)) {
+    if (!lorawan_.requestJoin(error, forceRestart)) {
       sendError("lorawan_join_failed", error);
       return true;
     }
