@@ -84,6 +84,7 @@ enum class UiMode : uint8_t {
 bool g_displayReady = false;
 bool g_displaySleeping = false;
 uint8_t g_lastDisplayBrightness = 255;
+unsigned long g_lastDisplayInitAttemptMs = 0;
 DisplayScreen g_displayScreen = DisplayScreen::kConnectivity;
 UiMode g_uiMode = UiMode::kView;
 uint8_t g_menuIndex = 0;
@@ -332,8 +333,70 @@ bool probeDisplayAddress(uint8_t address, uint32_t i2cFreq) {
   return Wire.endTransmission() == 0;
 }
 
+bool initDisplay() {
+#ifdef Heltec_Vext
+  // Ensure OLED rail is powered before init attempts.
+  Heltec.VextON();
+  delay(150);
+#endif
+#if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
+  g_displayReady = false;
+  Heltec.display = nullptr;
+  const uint8_t addresses[] = {0x3c, 0x3d};
+  const uint32_t freqs[] = {500000UL, 400000UL, 100000UL};
+  const int8_t resetPins[] = {RST_OLED, -1};
+  const DISPLAY_GEOMETRY geometries[] = {GEOMETRY_128_64, GEOMETRY_64_32};
+  for (const auto address : addresses) {
+    for (const auto freq : freqs) {
+      for (const auto resetPin : resetPins) {
+        for (const auto geometry : geometries) {
+          if (tryInitDisplay(address, freq, resetPin, geometry)) {
+            g_displayReady = true;
+            break;
+          }
+        }
+        if (g_displayReady) break;
+      }
+      if (g_displayReady) break;
+    }
+    if (g_displayReady) break;
+  }
+  if (!g_displayReady) {
+    Serial.println("[display] all init attempts failed");
+  }
+  return g_displayReady;
+#else
+  if (Heltec.display != nullptr) {
+    Heltec.display->init();
+    Heltec.display->clear();
+    Heltec.display->setFont(ArialMT_Plain_10);
+    applyDisplayBrightness();
+    Heltec.display->displayOn();
+    Heltec.display->display();
+    g_displayReady = true;
+    return true;
+  }
+  return false;
+#endif
+}
+
+bool ensureDisplayReady() {
+  if (g_displayReady && Heltec.display != nullptr) {
+    return true;
+  }
+  const unsigned long nowMs = millis();
+  if ((nowMs - g_lastDisplayInitAttemptMs) < 2000UL) {
+    return false;
+  }
+  g_lastDisplayInitAttemptMs = nowMs;
+  return initDisplay();
+}
+
 void applyDisplayBrightness() {
   if (Heltec.display == nullptr) return;
+#ifdef Heltec_Vext
+  Heltec.VextON();
+#endif
   const uint8_t requested = g_state.snapshot().connection.displayBrightness;
   // Avoid a fully black screen if the stored value is zero/corrupt.
   uint8_t brightness = requested == 0 ? 255 : requested;
@@ -407,7 +470,9 @@ void markUserInteraction() {
 
 void wakeDisplay() {
   markUserInteraction();
-  if (!g_displayReady || Heltec.display == nullptr) return;
+  if (!ensureDisplayReady()) {
+    return;
+  }
   if (g_displaySleeping) {
     Heltec.display->wakeup();
   }
@@ -421,7 +486,7 @@ uint8_t menuItemCount(DisplayScreen screen) {
     case DisplayScreen::kMintStream:
       return 3;  // Wake links, clear stream, back
     case DisplayScreen::kAutomation:
-      return 5;  // Toggle auto-mint, interval, select token, toggle token, back
+      return 1;  // Dashboard-only control, back
     case DisplayScreen::kLastEvent:
       return 2;  // Refresh clock, back
     case DisplayScreen::kConnectivity:
@@ -438,24 +503,6 @@ String menuItemLabel(DisplayScreen screen) {
       if (g_menuIndex == 1) return "Clear mint stream";
       return "Back";
     case DisplayScreen::kAutomation:
-      if (g_menuIndex == 0) {
-        return snapshot.config.autoMintEnabled ? "AutoMint: ON" : "AutoMint: OFF";
-      }
-      if (g_menuIndex == 1) {
-        return "Interval: " + formatSecondsPreset(snapshot.config.autoMintIntervalSeconds);
-      }
-      if (g_menuIndex == 2) {
-        if (snapshot.config.mintProfiles.empty()) return "Token: none";
-        const size_t selected = g_profileMenuIndex % snapshot.config.mintProfiles.size();
-        const auto &profile = snapshot.config.mintProfiles[selected];
-        String line = "Profile: ";
-        line += lora20::tickToString(profile.tick);
-        line += profile.enabled ? " ON" : " OFF";
-        return line;
-      }
-      if (g_menuIndex == 3) {
-        return "Toggle token";
-      }
       return "Back";
     case DisplayScreen::kLastEvent:
       return g_menuIndex == 0 ? "Sync clock (NTP)" : "Back";
@@ -495,48 +542,11 @@ void executeMenuAction() {
     return;
   }
 
-  if (g_displayScreen == DisplayScreen::kAutomation) {
-    auto next = snapshot.config;
-    if (g_menuIndex == 0) {
-      next.autoMintEnabled = !next.autoMintEnabled;
-      if (g_state.updateConfig(next, error)) {
-        pushSystemEvent(next.autoMintEnabled ? "AutoMint enabled" : "AutoMint disabled");
-      } else {
-        pushSystemEvent("ERR config " + error);
-      }
+    if (g_displayScreen == DisplayScreen::kAutomation) {
+      pushSystemEvent("AutoMint via dashboard");
+      g_uiMode = UiMode::kView;
       return;
     }
-    if (g_menuIndex == 1) {
-      next.autoMintIntervalSeconds = nextPresetValue<uint32_t>(next.autoMintIntervalSeconds, kAutoMintIntervalPresets);
-      if (g_state.updateConfig(next, error)) {
-        pushSystemEvent("Interval " + formatSecondsPreset(next.autoMintIntervalSeconds));
-      } else {
-        pushSystemEvent("ERR interval " + error);
-      }
-      return;
-    }
-    if (g_menuIndex == 2) {
-      if (!next.mintProfiles.empty()) {
-        g_profileMenuIndex = (g_profileMenuIndex + 1) % next.mintProfiles.size();
-      }
-      return;
-    }
-    if (g_menuIndex == 3) {
-      if (!next.mintProfiles.empty()) {
-        const size_t selected = g_profileMenuIndex % next.mintProfiles.size();
-        next.mintProfiles[selected].enabled = !next.mintProfiles[selected].enabled;
-        if (g_state.updateConfig(next, error)) {
-          pushSystemEvent(String("Token ") + lora20::tickToString(next.mintProfiles[selected].tick) +
-                          (next.mintProfiles[selected].enabled ? " enabled" : " disabled"));
-        } else {
-          pushSystemEvent("ERR token " + error);
-        }
-      }
-      return;
-    }
-    g_uiMode = UiMode::kView;
-    return;
-  }
 
   if (g_displayScreen == DisplayScreen::kLastEvent) {
     if (g_menuIndex == 0) {
@@ -597,7 +607,7 @@ void executeMenuAction() {
 }
 
 void updateDisplay() {
-  if (!g_displayReady || Heltec.display == nullptr) return;
+  if (!ensureDisplayReady()) return;
 
   const unsigned long nowMs = millis();
   const auto &snapshot = g_state.snapshot();
@@ -980,6 +990,20 @@ void serviceAutoMint() {
   }
 
   const lora20::MintProfile &profile = activeProfiles[g_autoMintCursor];
+  if (!g_lorawan.status().joined) {
+    g_lastAutoMintAttemptMs = nowMs;
+    g_nextAutoMintAtMs = nowMs + 5000UL;
+    emitAutoMintEvent(
+        "waiting_join",
+        &profile,
+        0,
+        "radio not joined",
+        activeProfiles.size(),
+        nowMs,
+        g_nextAutoMintAtMs,
+        false);
+    return;
+  }
   lora20::PreparedPayload prepared;
   String error;
   const uint32_t nonce = snapshot.nextNonce;
@@ -1109,47 +1133,7 @@ void setup() {
   }
 
   Heltec.begin(false, false, false);
-#ifdef Heltec_Vext
-  // Heltec V4 OLED power rail is controlled by Vext. Force it ON before custom display init.
-  Heltec.VextON();
-  delay(150);
-#endif
-#if defined(SDA_OLED) && defined(SCL_OLED) && defined(RST_OLED)
-  // Force explicit OLED init with fallbacks for Heltec V4 variants.
-  Heltec.display = nullptr;
-  const uint8_t addresses[] = {0x3c, 0x3d};
-  const uint32_t freqs[] = {500000UL, 400000UL, 100000UL};
-  const int8_t resetPins[] = {RST_OLED, -1};
-  const DISPLAY_GEOMETRY geometries[] = {GEOMETRY_128_64, GEOMETRY_64_32};
-  for (const auto address : addresses) {
-    for (const auto freq : freqs) {
-      for (const auto resetPin : resetPins) {
-        for (const auto geometry : geometries) {
-          if (tryInitDisplay(address, freq, resetPin, geometry)) {
-            g_displayReady = true;
-            break;
-          }
-        }
-        if (g_displayReady) break;
-      }
-      if (g_displayReady) break;
-    }
-    if (g_displayReady) break;
-  }
-  if (!g_displayReady) {
-    Serial.println("[display] all init attempts failed");
-  }
-#else
-  if (Heltec.display != nullptr) {
-    Heltec.display->init();
-    Heltec.display->clear();
-    Heltec.display->setFont(ArialMT_Plain_10);
-    applyDisplayBrightness();
-    Heltec.display->displayOn();
-    Heltec.display->display();
-    g_displayReady = true;
-  }
-#endif
+  initDisplay();
   pinMode(LORA20_PRG_PIN, INPUT_PULLUP);
 
   g_rpc.begin();
