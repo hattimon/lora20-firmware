@@ -56,7 +56,6 @@ void WifiBridge::begin() {
   server_.on("/health", HTTP_GET, [this]() { handleHealth(); });
   server_.on("/rpc", HTTP_OPTIONS, [this]() { handleOptions(); });
   server_.on("/rpc", HTTP_POST, [this]() { handleRpc(); });
-  server_.onNotFound([this]() { handleNotFound(); });
 }
 
 void WifiBridge::poll() {
@@ -255,19 +254,6 @@ void WifiBridge::handleHealth() {
   String payload;
   serializeJson(response, payload);
   sendJson(200, payload);
-}
-
-void WifiBridge::handleNotFound() {
-  lastActivityMs_ = millis();
-  DynamicJsonDocument response(256);
-  response["ok"] = false;
-  JsonObject error = response.createNestedObject("error");
-  error["code"] = "not_found";
-  error["message"] = "Unknown path";
-  response["path"] = server_.uri();
-  String payload;
-  serializeJson(response, payload);
-  sendJson(404, payload);
 }
 
 String WifiBridge::extractAuthTokenFromHeaders() {
