@@ -239,7 +239,6 @@ void writeLoRaWanStatus(JsonObject target, const lora20::LoRaWanRuntimeStatus &s
   target["lastDownlinkRssi"] = status.lastDownlinkRssi;
   target["lastDownlinkSnr"] = status.lastDownlinkSnr;
   target["lastDownlinkPort"] = status.lastDownlinkPort;
-  target["effectiveJoinDataRate"] = status.effectiveJoinDataRate;
   target["region"] = status.region;
   target["chipIdHex"] = status.chipIdHex;
   target["effectiveDevEuiHex"] = status.effectiveDevEuiHex;
@@ -510,7 +509,6 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
         runtimeJson["joining"] = runtime.joining;
         runtimeJson["joined"] = runtime.joined;
         runtimeJson["queuePending"] = runtime.queuePending;
-        runtimeJson["effectiveJoinDataRate"] = runtime.effectiveJoinDataRate;
         runtimeJson["region"] = runtime.region;
         runtimeJson["chipIdHex"] = runtime.chipIdHex;
         runtimeJson["lastEvent"] = runtime.lastEvent;

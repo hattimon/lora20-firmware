@@ -25,7 +25,6 @@ struct LoRaWanRuntimeStatus {
   int16_t lastDownlinkRssi = 0;
   int8_t lastDownlinkSnr = 0;
   uint8_t lastDownlinkPort = 0;
-  uint8_t effectiveJoinDataRate = 0;
   String region = "EU868";
   String chipIdHex;
   String effectiveDevEuiHex;
@@ -84,6 +83,5 @@ class LoRaWanClient {
 
 String effectiveDevEuiHex(const DeviceSnapshot &snapshot);
 String devEuiSourceLabel(const DeviceSnapshot &snapshot);
-uint8_t effectiveJoinDataRate(const DeviceSnapshot &snapshot);
 
 }  // namespace lora20
