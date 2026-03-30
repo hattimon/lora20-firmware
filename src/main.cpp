@@ -2,13 +2,15 @@
 #include <ArduinoJson.h>
 #include <cstring>
 
+#include "boot_control.hpp"
 #include "lora20_device.hpp"
 #include "lorawan_client.hpp"
 #include "serial_rpc.hpp"
 
 lora20::DeviceStateStore g_state;
 lora20::LoRaWanClient g_lorawan(g_state);
-lora20::SerialRpcServer g_rpc(Serial, g_state, g_lorawan);
+lora20::BootControl g_boot(Serial);
+lora20::SerialRpcServer g_rpc(Serial, g_state, g_lorawan, g_boot);
 bool g_ready = false;
 bool g_autoMintArmed = false;
 unsigned long g_nextAutoMintAtMs = 0;
@@ -275,6 +277,16 @@ void setup() {
     return;
   }
 
+  String bootError;
+  g_boot.begin(bootError);
+  if (bootError.length() > 0) {
+    DynamicJsonDocument warningDoc(256);
+    warningDoc["type"] = "warning";
+    warningDoc["message"] = bootError;
+    serializeJson(warningDoc, Serial);
+    Serial.println();
+  }
+
   g_rpc.begin();
   g_ready = true;
 }
@@ -286,6 +298,7 @@ void loop() {
   }
 
   g_lorawan.poll();
+  g_boot.poll();
   g_rpc.poll();
   serviceAutoMint();
   delay(2);

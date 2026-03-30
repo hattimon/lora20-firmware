@@ -8,6 +8,7 @@
 namespace {
 
 constexpr size_t kLineLimit = 3072;
+constexpr size_t kResponseCapacity = 6144;
 
 String u64ToString(uint64_t value) {
   char buffer[32];
@@ -241,6 +242,31 @@ void writeSnapshot(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
   target["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
 }
 
+void writeBootStatus(JsonObject target, const lora20::BootControlStatus &status) {
+  target["supported"] = status.supported;
+  target["currentProtocol"] = status.currentProtocol;
+  target["bootProtocol"] = status.bootProtocol;
+  target["runningPartitionLabel"] = status.runningPartitionLabel;
+  target["bootPartitionLabel"] = status.bootPartitionLabel;
+  target["buttonHint"] = status.buttonHint;
+
+  JsonArray slots = target.createNestedArray("slots");
+  for (const auto &slot : status.slots) {
+    JsonObject entry = slots.createNestedObject();
+    entry["protocol"] = slot.protocol;
+    entry["partitionLabel"] = slot.partitionLabel;
+    entry["subtype"] = slot.subtype;
+    entry["address"] = slot.address;
+    entry["sizeBytes"] = slot.sizeBytes;
+    entry["partitionPresent"] = slot.partitionPresent;
+    entry["validImage"] = slot.validImage;
+    entry["running"] = slot.running;
+    entry["bootTarget"] = slot.bootTarget;
+    entry["projectName"] = slot.projectName;
+    entry["version"] = slot.version;
+  }
+}
+
 void writePreparedPayload(JsonObject target, const lora20::PreparedPayload &prepared) {
   target["nonce"] = prepared.nonce;
   target["committed"] = prepared.committed;
@@ -343,8 +369,8 @@ bool readHexVectorParam(JsonVariantConst value, size_t maxBytes, std::vector<uin
 
 namespace lora20 {
 
-SerialRpcServer::SerialRpcServer(Stream &serial, DeviceStateStore &state, LoRaWanClient &lorawan)
-    : serial_(serial), state_(state), lorawan_(lorawan) {}
+SerialRpcServer::SerialRpcServer(Stream &serial, DeviceStateStore &state, LoRaWanClient &lorawan, BootControl &boot)
+    : serial_(serial), state_(state), lorawan_(lorawan), boot_(boot) {}
 
 void SerialRpcServer::begin() {
   buffer_.reserve(kLineLimit);
@@ -402,7 +428,7 @@ void SerialRpcServer::handleLine(const String &line) {
   const char *requestId = request["id"].is<const char *>() ? request["id"].as<const char *>() : "";
   JsonVariantConst params = request["params"];
 
-  DynamicJsonDocument response(4096);
+  DynamicJsonDocument response(kResponseCapacity);
   if (requestId[0] != '\0') {
     response["id"] = requestId;
   }
@@ -455,7 +481,44 @@ void SerialRpcServer::handleLine(const String &line) {
       result["uptimeMs"] = millis();
       writeSnapshot(result.createNestedObject("device"), state_.snapshot());
       writeLoRaWanStatus(result.createNestedObject("lorawanRuntime"), lorawan_.status());
+      writeBootStatus(result.createNestedObject("boot"), boot_.status());
     });
+    return;
+  }
+
+  if (strcmp(command, "get_boot_control") == 0 || strcmp(command, "get_boot") == 0) {
+    sendSuccess([&](JsonObject result) {
+      writeBootStatus(result, boot_.status());
+    });
+    return;
+  }
+
+  if (strcmp(command, "set_boot_target") == 0) {
+    if (!params["protocol"].is<const char *>()) {
+      sendError("missing_protocol", "set_boot_target requires params.protocol");
+      return;
+    }
+
+    const bool reboot = params["reboot"].is<bool>() ? params["reboot"].as<bool>() : true;
+    const String protocol = String(params["protocol"].as<const char *>());
+    String error;
+    if (!boot_.switchToProtocol(protocol, false, error)) {
+      sendError("boot_switch_failed", error);
+      return;
+    }
+
+    sendSuccess([&](JsonObject result) {
+      result["protocol"] = protocol;
+      result["rebootPending"] = reboot;
+      result["message"] = reboot ? "Boot target updated; rebooting now" : "Boot target updated";
+      writeBootStatus(result.createNestedObject("boot"), boot_.status());
+    });
+
+    if (reboot) {
+      delay(50);
+      serial_.flush();
+      ESP.restart();
+    }
     return;
   }
 
@@ -1021,7 +1084,7 @@ void SerialRpcServer::handleLine(const String &line) {
 }
 
 void SerialRpcServer::sendBootEvent() {
-  DynamicJsonDocument boot(1024);
+  DynamicJsonDocument boot(2048);
   boot["type"] = "boot";
   boot["firmware"] = kFirmwareName;
   boot["version"] = LORA20_FW_VERSION;
@@ -1031,6 +1094,7 @@ void SerialRpcServer::sendBootEvent() {
   boot["lorawanConfigured"] = lorawan_.status().configured;
   JsonObject runtime = boot.createNestedObject("lorawanRuntime");
   writeLoRaWanStatus(runtime, lorawan_.status());
+  writeBootStatus(boot.createNestedObject("bootControl"), boot_.status());
   sendDocument(serial_, boot);
 }
 
