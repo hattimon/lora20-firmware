@@ -206,7 +206,8 @@ bool readMintProfilesParam(JsonVariantConst value, std::vector<lora20::MintProfi
   return true;
 }
 
-void writeLoRaWanConfig(JsonObject target, const lora20::LoRaWanConfig &config) {
+void writeLoRaWanConfig(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
+  const auto &config = snapshot.loRaWan;
   target["autoDevEui"] = config.autoDevEui;
   target["adr"] = config.adr;
   target["confirmedUplink"] = config.confirmedUplink;
@@ -215,7 +216,9 @@ void writeLoRaWanConfig(JsonObject target, const lora20::LoRaWanConfig &config) 
   target["hasDevEui"] = config.hasDevEui;
   target["hasJoinEui"] = config.hasJoinEui;
   target["hasAppKey"] = config.hasAppKey;
-  target["devEuiHex"] = config.hasDevEui ? lora20::toHex(config.devEui) : "";
+  target["devEuiHex"] = lora20::effectiveDevEuiHex(snapshot);
+  target["storedDevEuiHex"] = config.hasDevEui ? lora20::toHex(config.devEui) : "";
+  target["devEuiSource"] = lora20::devEuiSourceLabel(snapshot);
   target["joinEuiHex"] = config.hasJoinEui ? lora20::toHex(config.joinEui) : "";
   target["appKeyHex"] = config.hasAppKey ? lora20::toHex(config.appKey) : "";
 }
@@ -238,6 +241,8 @@ void writeLoRaWanStatus(JsonObject target, const lora20::LoRaWanRuntimeStatus &s
   target["lastDownlinkPort"] = status.lastDownlinkPort;
   target["region"] = status.region;
   target["chipIdHex"] = status.chipIdHex;
+  target["effectiveDevEuiHex"] = status.effectiveDevEuiHex;
+  target["devEuiSource"] = status.devEuiSource;
   target["lastEvent"] = status.lastEvent;
   target["lastError"] = status.lastError;
   target["lastDownlinkHex"] = status.lastDownlinkHex;
@@ -258,7 +263,7 @@ void writeSnapshot(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
   target["nextNonce"] = snapshot.nextNonce;
   writeConnectionConfig(target.createNestedObject("connection"), snapshot.connection);
   writeConfig(target.createNestedObject("config"), snapshot.config);
-  writeLoRaWanConfig(target.createNestedObject("lorawan"), snapshot.loRaWan);
+  writeLoRaWanConfig(target.createNestedObject("lorawan"), snapshot);
   target["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
 }
 
@@ -357,10 +362,12 @@ void RpcProcessor::buildBootEvent(String &response) {
   boot["displayBrightness"] = snapshot.connection.displayBrightness;
   boot["autoMintEnabled"] = snapshot.config.autoMintEnabled;
   boot["autoMintProfileCount"] = snapshot.config.mintProfiles.size();
-  const bool lorawanKeysConfigured = snapshot.loRaWan.hasDevEui &&
+  const bool lorawanKeysConfigured = (snapshot.loRaWan.autoDevEui || snapshot.loRaWan.hasDevEui) &&
                                      snapshot.loRaWan.hasJoinEui &&
                                      snapshot.loRaWan.hasAppKey;
   boot["lorawanConfigured"] = lorawanKeysConfigured;
+  boot["lorawanDevEuiHex"] = effectiveDevEuiHex(snapshot);
+  boot["lorawanDevEuiSource"] = devEuiSourceLabel(snapshot);
   boot["lorawanRuntimeConfigured"] = lorawan_.status().configured;
   JsonObject runtime = boot.createNestedObject("lorawanRuntime");
   writeLoRaWanStatus(runtime, lorawan_.status());
@@ -527,10 +534,12 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
         config["hasDevEui"] = snapshot.loRaWan.hasDevEui;
         config["hasJoinEui"] = snapshot.loRaWan.hasJoinEui;
         config["hasAppKey"] = snapshot.loRaWan.hasAppKey;
-        config["devEuiHex"] = snapshot.loRaWan.hasDevEui ? lora20::toHex(snapshot.loRaWan.devEui) : "";
+        config["devEuiHex"] = lora20::effectiveDevEuiHex(snapshot);
+        config["storedDevEuiHex"] = snapshot.loRaWan.hasDevEui ? lora20::toHex(snapshot.loRaWan.devEui) : "";
+        config["devEuiSource"] = lora20::devEuiSourceLabel(snapshot);
         config["joinEuiHex"] = snapshot.loRaWan.hasJoinEui ? lora20::toHex(snapshot.loRaWan.joinEui) : "";
       } else {
-        writeLoRaWanConfig(config, snapshot.loRaWan);
+        writeLoRaWanConfig(config, snapshot);
       }
 
       JsonObject runtimeJson = result.createNestedObject("runtime");
@@ -819,7 +828,7 @@ bool RpcProcessor::handleLine(const String &line, String &response, bool require
     lorawan_.reset();
 
     sendSuccess([&](JsonObject result) {
-      writeLoRaWanConfig(result.createNestedObject("config"), state_.snapshot().loRaWan);
+      writeLoRaWanConfig(result.createNestedObject("config"), state_.snapshot());
       writeLoRaWanStatus(result.createNestedObject("runtime"), lorawan_.status());
     });
     return true;

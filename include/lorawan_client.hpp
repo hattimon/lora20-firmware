@@ -27,6 +27,8 @@ struct LoRaWanRuntimeStatus {
   uint8_t lastDownlinkPort = 0;
   String region = "EU868";
   String chipIdHex;
+  String effectiveDevEuiHex;
+  String devEuiSource;
   String lastEvent;
   String lastError;
   String lastDownlinkHex;
@@ -78,5 +80,8 @@ class LoRaWanClient {
   std::vector<uint8_t> lastAcceptedPayload_;
   bool hasAcceptedPayload_ = false;
 };
+
+String effectiveDevEuiHex(const DeviceSnapshot &snapshot);
+String devEuiSourceLabel(const DeviceSnapshot &snapshot);
 
 }  // namespace lora20
