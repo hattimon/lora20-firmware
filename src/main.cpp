@@ -413,6 +413,10 @@ void applyDisplayBrightness() {
   const uint8_t requested = g_state.snapshot().connection.displayBrightness;
   // Avoid a fully black screen if the stored value is zero/corrupt.
   uint8_t brightness = requested == 0 ? 255 : requested;
+  // Guard against unreadable near-black values from stale config.
+  if (brightness < 96) {
+    brightness = 255;
+  }
   Heltec.display->wakeup();
   Heltec.display->setBrightness(brightness);
   Heltec.display->normalDisplay();
@@ -468,6 +472,47 @@ void pushSystemEvent(const String &label) {
   event.payloadSize = 0;
   event.timestamp = time(nullptr);
   pushDeviceEvent(event);
+}
+
+void maybeDisableAutoMintOnBoot() {
+  // Recovery mode: hold PRG while booting to force auto-mint OFF.
+  if (digitalRead(LORA20_PRG_PIN) != LOW) {
+    return;
+  }
+
+  const unsigned long holdStartedMs = millis();
+  while ((millis() - holdStartedMs) < 1500UL) {
+    if (digitalRead(LORA20_PRG_PIN) != LOW) {
+      return;
+    }
+    delay(20);
+  }
+
+  auto nextConfig = g_state.snapshot().config;
+  bool changed = false;
+  if (nextConfig.autoMintEnabled) {
+    nextConfig.autoMintEnabled = false;
+    changed = true;
+  }
+  for (auto &profile : nextConfig.mintProfiles) {
+    if (profile.enabled) {
+      profile.enabled = false;
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    Serial.println("[boot] PRG hold detected, auto-mint already disabled");
+    return;
+  }
+
+  String error;
+  if (!g_state.updateConfig(nextConfig, error)) {
+    Serial.printf("[boot] failed to disable auto-mint: %s\n", error.c_str());
+    return;
+  }
+  Serial.println("[boot] PRG hold detected, auto-mint disabled");
+  pushSystemEvent("Auto-mint OFF (PRG boot hold)");
 }
 
 void reopenBridgeWindow() {
@@ -1148,6 +1193,7 @@ void setup() {
   Heltec.begin(false, false, false);
   initDisplay();
   pinMode(LORA20_PRG_PIN, INPUT_PULLUP);
+  maybeDisableAutoMintOnBoot();
 
   g_rpc.begin();
   g_wifiBridge.begin();
