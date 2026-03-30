@@ -333,6 +333,8 @@ bool probeDisplayAddress(uint8_t address, uint32_t i2cFreq) {
   return Wire.endTransmission() == 0;
 }
 
+bool tryInitDisplay(uint8_t address, uint32_t i2cFreq, int8_t rstPin, DISPLAY_GEOMETRY geometry);
+
 bool initDisplay() {
 #ifdef Heltec_Vext
   // Ensure OLED rail is powered before init attempts.
