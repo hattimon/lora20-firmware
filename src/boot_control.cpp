@@ -79,8 +79,9 @@ HoldTargetDefinition holdTargetsForProtocol(const String &protocol) {
 
 String buildButtonHint(const String &currentProtocol) {
   const HoldTargetDefinition targets = holdTargetsForProtocol(currentProtocol);
-  return String("Hold PRG for 3-5.9s, release to switch to ") + targets.shortHoldProtocol +
-         ". Hold for 6s+, release to switch to " + targets.longHoldProtocol;
+  return String("Hold PRG for 3-5.9s, release to arm ") + targets.shortHoldProtocol +
+         ". Hold for 6s+, release to arm " + targets.longHoldProtocol +
+         ". Press RESET to switch or PRG again to cancel";
 }
 
 String protocolFromPartition(const esp_partition_t *partition) {
@@ -131,7 +132,35 @@ void BootControl::poll() {
   const bool pressed = digitalRead(kPrgButtonPin) == LOW;
   const unsigned long nowMs = millis();
 
+  if (ignoreUntilRelease_) {
+    if (!pressed) {
+      ignoreUntilRelease_ = false;
+    }
+    return;
+  }
+
   if (pressed && !buttonPressed_) {
+    if (switchArmActive_) {
+      String error;
+      const String currentProtocol = status().currentProtocol;
+      const String cancelledTarget = armedProtocol_;
+      switchArmActive_ = false;
+      armedProtocol_ = "";
+      if (!switchToProtocol(currentProtocol, false, error)) {
+        emitSwitchEvent("button_switch_arm_cancel_failed",
+                        currentProtocol,
+                        String("Failed to cancel armed boot target: ") + error,
+                        false);
+      } else {
+        emitSwitchEvent("button_switch_arm_cancelled",
+                        cancelledTarget,
+                        String("Switch arm cancelled; boot target restored to ") + currentProtocol,
+                        false);
+      }
+      ignoreUntilRelease_ = true;
+      return;
+    }
+
     buttonPressed_ = true;
     buttonDownSinceMs_ = nowMs;
     buttonHintStage_ = 0;
@@ -147,12 +176,28 @@ void BootControl::poll() {
     const HoldTargetDefinition targets = holdTargetsForProtocol(status().currentProtocol);
     String error;
     if (heldMs >= kMeshtasticHoldMs) {
-      if (!switchToProtocol(targets.longHoldProtocol, true, error)) {
+      if (!switchToProtocol(targets.longHoldProtocol, false, error)) {
         emitSwitchEvent("button_switch_failed", targets.longHoldProtocol, error, false);
+      } else {
+        switchArmActive_ = true;
+        armedProtocol_ = targets.longHoldProtocol;
+        emitSwitchEvent("button_switch_armed",
+                        targets.longHoldProtocol,
+                        String("Boot target armed to ") + targets.longHoldProtocol +
+                            "; press RESET to switch, or PRG again to cancel",
+                        false);
       }
     } else if (heldMs >= kMeshCoreHoldMs) {
-      if (!switchToProtocol(targets.shortHoldProtocol, true, error)) {
+      if (!switchToProtocol(targets.shortHoldProtocol, false, error)) {
         emitSwitchEvent("button_switch_failed", targets.shortHoldProtocol, error, false);
+      } else {
+        switchArmActive_ = true;
+        armedProtocol_ = targets.shortHoldProtocol;
+        emitSwitchEvent("button_switch_armed",
+                        targets.shortHoldProtocol,
+                        String("Boot target armed to ") + targets.shortHoldProtocol +
+                            "; press RESET to switch, or PRG again to cancel",
+                        false);
       }
     }
     return;
@@ -287,7 +332,8 @@ void BootControl::emitButtonHint(const String &protocol, unsigned long holdMs) {
   event["type"] = "boot_switch_hint";
   event["protocol"] = protocol;
   event["holdMs"] = holdMs;
-  event["message"] = String("Release PRG now to switch to ") + protocol;
+  event["message"] =
+      String("Release PRG now to arm ") + protocol + ", then press RESET or PRG again to cancel";
   writeDocument(serial_, event);
 }
 

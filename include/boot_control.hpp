@@ -56,6 +56,9 @@ class BootControl {
   bool buttonPressed_ = false;
   unsigned long buttonDownSinceMs_ = 0;
   uint8_t buttonHintStage_ = 0;
+  bool switchArmActive_ = false;
+  String armedProtocol_;
+  bool ignoreUntilRelease_ = false;
 };
 
 }  // namespace lora20
