@@ -65,6 +65,12 @@ String twoDigitNumber(int value) {
   return String(value);
 }
 
+String formatSixDigitPin(uint32_t pin) {
+  char buffer[7];
+  snprintf(buffer, sizeof(buffer), "%06lu", static_cast<unsigned long>(pin % 1000000UL));
+  return String(buffer);
+}
+
 void drawCenteredLine(int16_t y, const String &text, uint8_t size) {
   int16_t x1 = 0;
   int16_t y1 = 0;
@@ -263,9 +269,15 @@ void OledStatusDisplay::renderScreen(const BootControlStatus &bootStatus,
   } else if (connectivityStatus.bluetooth.enabled &&
              (connectivityStatus.bluetooth.pairing ||
               (connectivityStatus.activeInterface == "bluetooth" && !connectivityStatus.bluetooth.connected))) {
-    title = connectivityStatus.bluetooth.connected ? "BLE LINK" : "BLE READY";
-    line1 = shortenMiddle(connectivityStatus.bluetooth.deviceName, 20);
-    line2 = connectivityStatus.bluetooth.connected ? "Connected" : "Pair on phone/PC";
+    if (connectivityStatus.bluetooth.pairing) {
+      title = "BLE PAIR";
+      line1 = String("PIN ") + formatSixDigitPin(connectivityStatus.bluetooth.pin);
+      line2 = "Enter on phone/PC";
+    } else {
+      title = connectivityStatus.bluetooth.connected ? "BLE LINK" : "BLE READY";
+      line1 = shortenMiddle(connectivityStatus.bluetooth.deviceName, 20);
+      line2 = connectivityStatus.bluetooth.connected ? "Connected" : "Pair on phone/PC";
+    }
   } else if (connectivityStatus.wifi.connected && connectivityStatus.wifi.ipAddress.length() > 0) {
     title = "WIFI IP";
     line1 = connectivityStatus.wifi.ipAddress;
