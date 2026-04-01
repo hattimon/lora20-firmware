@@ -13,7 +13,7 @@ lora20::DeviceStateStore g_state;
 lora20::LoRaWanClient g_lorawan(g_state);
 lora20::BootControl g_boot(Serial);
 lora20::ConnectivityManager g_connectivity(g_state);
-lora20::OledStatusDisplay g_display(Serial);
+lora20::OledStatusDisplay g_display(Serial, g_state, g_connectivity);
 lora20::SerialRpcServer g_rpc(Serial, g_state, g_lorawan, g_boot, g_connectivity);
 bool g_ready = false;
 bool g_autoMintArmed = false;
@@ -25,11 +25,39 @@ std::vector<lora20::MintProfile> g_lastAutoMintProfiles;
 String g_lastAutoMintStage;
 String g_lastAutoMintError;
 unsigned long g_lastAutoMintEventAtMs = 0;
+lora20::AutoMintRuntimeStatus g_autoMintUiStatus;
 
 String mintAmountToString(uint64_t amount) {
   char buffer[32];
   snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(amount));
   return String(buffer);
+}
+
+void pushRecentAutoMintPacket(const lora20::MintProfile &profile, uint32_t nonce) {
+  for (size_t index = g_autoMintUiStatus.recentPackets.size() - 1; index > 0; --index) {
+    g_autoMintUiStatus.recentPackets[index] = g_autoMintUiStatus.recentPackets[index - 1];
+  }
+  g_autoMintUiStatus.recentPackets[0] =
+      String("MINT ") + lora20::tickToString(profile.tick) + " " + mintAmountToString(profile.amount) +
+      " n " + String(nonce);
+}
+
+void syncAutoMintUiStatus() {
+  const lora20::DeviceSnapshot &snapshot = g_state.snapshot();
+  g_autoMintUiStatus.enabled = snapshot.config.autoMintEnabled;
+  g_autoMintUiStatus.queueMode = !snapshot.config.mintProfiles.empty();
+  g_autoMintUiStatus.singleMode = snapshot.config.mintProfiles.empty();
+  g_autoMintUiStatus.totalProfiles = snapshot.config.mintProfiles.size();
+  g_autoMintUiStatus.enabledProfiles = 0;
+  for (const auto &profile : snapshot.config.mintProfiles) {
+    if (profile.enabled) {
+      g_autoMintUiStatus.enabledProfiles += 1;
+    }
+  }
+  g_autoMintUiStatus.intervalSeconds = snapshot.config.autoMintIntervalSeconds;
+  g_autoMintUiStatus.defaultTick = lora20::tickToString(snapshot.config.defaultTick);
+  g_autoMintUiStatus.defaultAmount = mintAmountToString(snapshot.config.defaultMintAmount);
+  g_autoMintUiStatus.lastError = g_lastAutoMintError;
 }
 
 void emitAutoMintEvent(const char *stage,
@@ -77,6 +105,10 @@ void emitAutoMintEvent(const char *stage,
   g_lastAutoMintStage = stageValue;
   g_lastAutoMintError = errorValue;
   g_lastAutoMintEventAtMs = nowMs;
+  if (stageValue == "queued" && profile != nullptr) {
+    pushRecentAutoMintPacket(*profile, nonce);
+  }
+  syncAutoMintUiStatus();
 }
 
 bool sameMintProfile(const lora20::MintProfile &left, const lora20::MintProfile &right) {
@@ -302,7 +334,8 @@ void setup() {
   }
 
   String displayError;
-  if (!g_display.begin(g_boot.status(), g_lorawan.status(), g_connectivity.status(), displayError) &&
+  syncAutoMintUiStatus();
+  if (!g_display.begin(g_boot.status(), g_lorawan.status(), g_connectivity.status(), g_autoMintUiStatus, displayError) &&
       displayError.length() > 0) {
     DynamicJsonDocument warningDoc(256);
     warningDoc["type"] = "warning";
@@ -324,8 +357,9 @@ void loop() {
   g_lorawan.poll();
   g_boot.poll();
   g_connectivity.poll();
-  g_display.poll(g_boot.status(), g_lorawan.status(), g_connectivity.status());
-  g_rpc.poll();
   serviceAutoMint();
+  syncAutoMintUiStatus();
+  g_display.poll(g_boot.status(), g_lorawan.status(), g_connectivity.status(), g_autoMintUiStatus);
+  g_rpc.poll();
   delay(2);
 }
