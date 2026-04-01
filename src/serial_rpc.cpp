@@ -193,6 +193,7 @@ void writeLoRaWanConfig(JsonObject target, const lora20::LoRaWanConfig &config) 
   target["confirmedUplink"] = config.confirmedUplink;
   target["appPort"] = config.appPort;
   target["defaultDataRate"] = config.defaultDataRate;
+  target["region"] = config.region;
   target["hasDevEui"] = config.hasDevEui;
   target["hasJoinEui"] = config.hasJoinEui;
   target["hasAppKey"] = config.hasAppKey;
@@ -645,6 +646,10 @@ void SerialRpcServer::handleLine(const String &line) {
         return;
       }
       next.defaultDataRate = static_cast<uint8_t>(rawValue);
+    }
+
+    if (params["region"].is<const char *>()) {
+      next.region = String(params["region"].as<const char *>());
     }
 
     if (!params["devEuiHex"].isNull() &&

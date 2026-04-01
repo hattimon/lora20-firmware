@@ -53,6 +53,7 @@ struct LoRaWanConfig {
   bool confirmedUplink = false;
   uint8_t appPort = 1;
   uint8_t defaultDataRate = 3;
+  String region = "EU868";
   bool hasDevEui = false;
   bool hasJoinEui = false;
   bool hasAppKey = false;

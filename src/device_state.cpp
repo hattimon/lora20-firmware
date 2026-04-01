@@ -29,6 +29,7 @@ constexpr const char *kLoRaWanAdrKey = "lw_adr";
 constexpr const char *kLoRaWanConfirmedKey = "lw_conf";
 constexpr const char *kLoRaWanAppPortKey = "lw_port";
 constexpr const char *kLoRaWanDataRateKey = "lw_dr";
+constexpr const char *kLoRaWanRegionKey = "lw_reg";
 constexpr const char *kLoRaWanDevEuiKey = "lw_deui";
 constexpr const char *kLoRaWanJoinEuiKey = "lw_jeui";
 constexpr const char *kLoRaWanAppKeyKey = "lw_appk";
@@ -47,6 +48,27 @@ bool isValidLoRaWanAppPort(uint32_t port) {
 
 bool isValidLoRaWanDataRate(uint32_t dataRate) {
   return dataRate <= 15;
+}
+
+bool normalizeLoRaWanRegionInput(const String &input, String &normalized) {
+  normalized = input;
+  normalized.trim();
+  normalized.toUpperCase();
+  normalized.replace("-", "_");
+  normalized.replace(" ", "_");
+
+  static constexpr const char *kSupportedRegions[] = {
+      "EU868", "EU433", "US915", "US915_HYBRID", "AU915", "AS923",
+      "AS923_AS1", "AS923_AS2", "KR920", "IN865", "CN470", "CN779", "RU864"};
+
+  for (const char *candidate : kSupportedRegions) {
+    if (normalized == candidate) {
+      normalized = candidate;
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool parseMintProfilesJson(const String &json, std::vector<lora20::MintProfile> &profiles, String &error) {
@@ -322,6 +344,14 @@ bool DeviceStateStore::loadSnapshot(String &error) {
   const uint32_t dataRate = prefs_.getUInt(kLoRaWanDataRateKey, 3);
   snapshot_.loRaWan.defaultDataRate = isValidLoRaWanDataRate(dataRate) ? static_cast<uint8_t>(dataRate) : 3;
 
+  String region = "EU868";
+  if (prefs_.isKey(kLoRaWanRegionKey)) {
+    region = prefs_.getString(kLoRaWanRegionKey, "EU868");
+  }
+  if (!normalizeLoRaWanRegionInput(region, snapshot_.loRaWan.region)) {
+    snapshot_.loRaWan.region = "EU868";
+  }
+
   String tick = prefs_.getString(kDefaultTickKey, "LORA");
   if (!normalizeTick(tick, snapshot_.config.defaultTick, error)) {
     std::memcpy(snapshot_.config.defaultTick, "LORA", 5);
@@ -589,6 +619,12 @@ bool DeviceStateStore::updateLoRaWanConfig(const LoRaWanConfig &config, String &
     return false;
   }
 
+  String normalizedRegion;
+  if (!normalizeLoRaWanRegionInput(config.region, normalizedRegion)) {
+    error = "LoRaWAN region is invalid or unsupported";
+    return false;
+  }
+
   if (!config.autoDevEui && !config.hasDevEui) {
     error = "LoRaWAN DevEUI is required when autoDevEui is disabled";
     return false;
@@ -605,6 +641,7 @@ bool DeviceStateStore::updateLoRaWanConfig(const LoRaWanConfig &config, String &
   }
 
   snapshot_.loRaWan = config;
+  snapshot_.loRaWan.region = normalizedRegion;
   return persistLoRaWanConfig(error);
 }
 
@@ -716,6 +753,11 @@ bool DeviceStateStore::persistLoRaWanConfig(String &error) {
 
   if (prefs_.putUInt(kLoRaWanDataRateKey, snapshot_.loRaWan.defaultDataRate) != sizeof(uint32_t)) {
     error = "Failed to persist LoRaWAN defaultDataRate";
+    return false;
+  }
+
+  if (prefs_.putString(kLoRaWanRegionKey, snapshot_.loRaWan.region) == 0) {
+    error = "Failed to persist LoRaWAN region";
     return false;
   }
 

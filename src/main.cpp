@@ -5,11 +5,13 @@
 #include "boot_control.hpp"
 #include "lora20_device.hpp"
 #include "lorawan_client.hpp"
+#include "oled_status_display.hpp"
 #include "serial_rpc.hpp"
 
 lora20::DeviceStateStore g_state;
 lora20::LoRaWanClient g_lorawan(g_state);
 lora20::BootControl g_boot(Serial);
+lora20::OledStatusDisplay g_display(Serial);
 lora20::SerialRpcServer g_rpc(Serial, g_state, g_lorawan, g_boot);
 bool g_ready = false;
 bool g_autoMintArmed = false;
@@ -287,6 +289,15 @@ void setup() {
     Serial.println();
   }
 
+  String displayError;
+  if (!g_display.begin(g_boot.status(), g_lorawan.status(), displayError) && displayError.length() > 0) {
+    DynamicJsonDocument warningDoc(256);
+    warningDoc["type"] = "warning";
+    warningDoc["message"] = displayError;
+    serializeJson(warningDoc, Serial);
+    Serial.println();
+  }
+
   g_rpc.begin();
   g_ready = true;
 }
@@ -299,6 +310,7 @@ void loop() {
 
   g_lorawan.poll();
   g_boot.poll();
+  g_display.poll(g_boot.status(), g_lorawan.status());
   g_rpc.poll();
   serviceAutoMint();
   delay(2);

@@ -24,6 +24,48 @@ String chipIdToHex(uint64_t chipId) {
   return String(buffer);
 }
 
+bool normalizeRegionName(const String &input, String &normalized) {
+  normalized = input;
+  normalized.trim();
+  normalized.toUpperCase();
+  normalized.replace("-", "_");
+  normalized.replace(" ", "_");
+
+  static constexpr const char *kSupportedRegions[] = {
+      "EU868", "EU433", "US915", "US915_HYBRID", "AU915", "AS923",
+      "AS923_AS1", "AS923_AS2", "KR920", "IN865", "CN470", "CN779", "RU864"};
+
+  for (const char *candidate : kSupportedRegions) {
+    if (normalized == candidate) {
+      normalized = candidate;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+LoRaMacRegion_t regionFromConfig(const String &regionName, String &normalized) {
+  if (!normalizeRegionName(regionName, normalized)) {
+    normalized = "EU868";
+    return LORAMAC_REGION_EU868;
+  }
+
+  if (normalized == "EU433") return LORAMAC_REGION_EU433;
+  if (normalized == "US915") return LORAMAC_REGION_US915;
+  if (normalized == "US915_HYBRID") return LORAMAC_REGION_US915_HYBRID;
+  if (normalized == "AU915") return LORAMAC_REGION_AU915;
+  if (normalized == "AS923") return LORAMAC_REGION_AS923;
+  if (normalized == "AS923_AS1") return LORAMAC_REGION_AS923_AS1;
+  if (normalized == "AS923_AS2") return LORAMAC_REGION_AS923_AS2;
+  if (normalized == "KR920") return LORAMAC_REGION_KR920;
+  if (normalized == "IN865") return LORAMAC_REGION_IN865;
+  if (normalized == "CN470") return LORAMAC_REGION_CN470;
+  if (normalized == "CN779") return LORAMAC_REGION_CN779;
+  if (normalized == "RU864") return LORAMAC_REGION_RU864;
+  return LORAMAC_REGION_EU868;
+}
+
 void populateAutoDevEui(uint8_t target[8]) {
   const uint64_t chipId = ESP.getEfuseMac();
   const uint32_t high = static_cast<uint32_t>(chipId >> 32);
@@ -96,6 +138,7 @@ namespace lora20 {
 
 LoRaWanClient::LoRaWanClient(DeviceStateStore &state) : state_(state) {
   status_.chipIdHex = chipIdHex();
+  status_.region = state_.snapshot().loRaWan.region;
 }
 
 void LoRaWanClient::poll() {
@@ -159,6 +202,7 @@ void LoRaWanClient::reset() {
   status_.lastSendAccepted = false;
   status_.lastAcceptedPayloadSize = 0;
   status_.queuedPayloadSize = 0;
+  status_.region = state_.snapshot().loRaWan.region;
   status_.lastEvent = "lorawan_reset";
   status_.lastError = "";
   deviceState = DEVICE_STATE_INIT;
@@ -368,7 +412,8 @@ bool LoRaWanClient::applyCurrentConfig(String &error) {
   appPort = snapshot.loRaWan.appPort;
   confirmedNbTrials = snapshot.loRaWan.confirmedUplink ? 2 : 1;
   appTxDutyCycle = 15000;
-  loraWanRegion = ACTIVE_REGION;
+  String normalizedRegion;
+  loraWanRegion = regionFromConfig(snapshot.loRaWan.region, normalizedRegion);
 
   if (snapshot.loRaWan.autoDevEui) {
     populateAutoDevEui(devEui);
@@ -378,7 +423,7 @@ bool LoRaWanClient::applyCurrentConfig(String &error) {
 
   std::memcpy(appEui, snapshot.loRaWan.joinEui.data(), snapshot.loRaWan.joinEui.size());
   std::memcpy(appKey, snapshot.loRaWan.appKey.data(), snapshot.loRaWan.appKey.size());
-  status_.region = "EU868";
+  status_.region = normalizedRegion;
   status_.configured = true;
   return true;
 }
@@ -441,6 +486,9 @@ bool LoRaWanClient::trySendQueued(String &error) {
 
 void LoRaWanClient::refreshJoinState() {
   status_.chipIdHex = chipIdHex();
+  String normalizedRegion;
+  regionFromConfig(state_.snapshot().loRaWan.region, normalizedRegion);
+  status_.region = normalizedRegion;
   status_.hardwareReady = hardwareReady_;
   status_.initialized = initialized_;
   status_.configured = isConfigured(state_.snapshot());
