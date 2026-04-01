@@ -17,6 +17,7 @@
 #include <string>
 
 #include "serial_rpc.hpp"
+#include "LoRaWan_APP.h"
 
 namespace {
 
@@ -397,6 +398,8 @@ void ConnectivityManager::refreshBattery() {
   if (nextBatterySampleMs_ != 0 && nowMs < nextBatterySampleMs_) {
     return;
   }
+
+  status_.battery.externalPower = (GetBoardPowerSource() == USB_POWER);
 
 #if defined(PIN_ADC_CTRL) && defined(PIN_VBAT_READ)
   analogReadResolution(10);

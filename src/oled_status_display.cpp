@@ -474,7 +474,7 @@ String OledStatusDisplay::intervalLabel(uint32_t seconds) const {
 }
 
 void OledStatusDisplay::drawTopBar(const ConnectivityRuntimeStatus &connectivityStatus, unsigned long nowMs) {
-  drawTextLine(0, 0, batteryLabel(connectivityStatus), 1);
+  drawBatteryStatus(connectivityStatus);
   drawConnectionIcons(connectivityStatus);
 
   const String clock = clockLabel(nowMs, connectivityStatus);
@@ -490,30 +490,100 @@ void OledStatusDisplay::drawTopBar(const ConnectivityRuntimeStatus &connectivity
 
 void OledStatusDisplay::drawConnectionIcons(const ConnectivityRuntimeStatus &connectivityStatus) {
   constexpr int16_t startX = 46;
-  constexpr int16_t topY = 0;
-  drawConnectionGlyph(startX, topY, 'U', connectivityStatus.usbConnected);
-  drawConnectionGlyph(startX + 13, topY, 'B', connectivityStatus.bluetooth.connected);
-  drawConnectionGlyph(startX + 26, topY, 'W', connectivityStatus.wifi.connected);
+  constexpr int16_t topY = 1;
+  drawUsbIcon(startX, topY, connectivityStatus.usbConnected);
+  drawBleIcon(startX + 13, topY, connectivityStatus.bluetooth.connected);
+  drawWifiIcon(startX + 26, topY, connectivityStatus.wifi.connected);
 }
 
-void OledStatusDisplay::drawConnectionGlyph(int16_t x, int16_t y, char label, bool active) {
+void OledStatusDisplay::drawUsbIcon(int16_t x, int16_t y, bool active) {
   constexpr int16_t width = 10;
   constexpr int16_t height = 8;
+  const int16_t centerX = x + 4;
 
-  if (active) {
-    g_display.fillRect(x, y, width, height, SSD1306_WHITE);
-    g_display.drawRect(x, y, width, height, SSD1306_WHITE);
-    g_display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
-  } else {
-    g_display.drawRect(x, y, width, height, SSD1306_WHITE);
-    g_display.drawLine(x, y + height - 1, x + width - 1, y, SSD1306_WHITE);
-    g_display.setTextColor(SSD1306_WHITE);
+  g_display.drawLine(centerX, y + 1, centerX, y + 7, SSD1306_WHITE);
+  g_display.drawLine(centerX, y + 1, centerX - 2, y + 3, SSD1306_WHITE);
+  g_display.drawLine(centerX, y + 1, centerX + 2, y + 3, SSD1306_WHITE);
+
+  g_display.drawLine(centerX, y + 4, x + 1, y + 4, SSD1306_WHITE);
+  g_display.fillCircle(x + 1, y + 4, 1, SSD1306_WHITE);
+
+  g_display.drawLine(centerX, y + 6, x + 8, y + 6, SSD1306_WHITE);
+  g_display.drawRect(x + 7, y + 5, 2, 2, SSD1306_WHITE);
+
+  if (!active) {
+    drawInactiveSlash(x, y, width, height);
+  }
+}
+
+void OledStatusDisplay::drawBleIcon(int16_t x, int16_t y, bool active) {
+  constexpr int16_t width = 9;
+  constexpr int16_t height = 8;
+  const int16_t centerX = x + 3;
+
+  g_display.drawLine(centerX, y, centerX, y + 8, SSD1306_WHITE);
+  g_display.drawLine(centerX, y, x + 7, y + 2, SSD1306_WHITE);
+  g_display.drawLine(centerX, y + 4, x + 7, y + 2, SSD1306_WHITE);
+  g_display.drawLine(centerX, y + 4, x + 7, y + 6, SSD1306_WHITE);
+  g_display.drawLine(centerX, y + 8, x + 7, y + 6, SSD1306_WHITE);
+
+  if (!active) {
+    drawInactiveSlash(x, y, width, height);
+  }
+}
+
+void OledStatusDisplay::drawWifiIcon(int16_t x, int16_t y, bool active) {
+  constexpr int16_t width = 10;
+  constexpr int16_t height = 8;
+  const int16_t centerX = x + 4;
+
+  g_display.drawPixel(centerX, y + 7, SSD1306_WHITE);
+  g_display.drawLine(centerX - 1, y + 6, centerX + 1, y + 6, SSD1306_WHITE);
+  g_display.drawLine(centerX - 3, y + 4, centerX + 3, y + 4, SSD1306_WHITE);
+  g_display.drawLine(centerX - 2, y + 2, centerX + 2, y + 2, SSD1306_WHITE);
+  g_display.drawPixel(centerX - 4, y + 3, SSD1306_WHITE);
+  g_display.drawPixel(centerX + 4, y + 3, SSD1306_WHITE);
+
+  if (!active) {
+    drawInactiveSlash(x, y, width, height);
+  }
+}
+
+void OledStatusDisplay::drawInactiveSlash(int16_t x, int16_t y, int16_t width, int16_t height) {
+  g_display.drawLine(x, y + height - 1, x + width - 1, y, SSD1306_WHITE);
+}
+
+void OledStatusDisplay::drawBatteryStatus(const ConnectivityRuntimeStatus &connectivityStatus) {
+  constexpr int16_t x = 0;
+  constexpr int16_t y = 1;
+  constexpr int16_t bodyWidth = 16;
+  constexpr int16_t bodyHeight = 8;
+  constexpr int16_t tipWidth = 2;
+  constexpr int16_t innerPadding = 1;
+
+  const bool externalPower = connectivityStatus.battery.externalPower || connectivityStatus.usbConnected;
+  const uint8_t percent =
+      externalPower ? 100 : static_cast<uint8_t>(std::min<int>(100, connectivityStatus.battery.percent));
+  const int16_t innerWidth = bodyWidth - (innerPadding * 2);
+  const int16_t fillWidth = std::max<int16_t>(
+      percent > 0 ? 1 : 0,
+      static_cast<int16_t>((static_cast<int32_t>(innerWidth) * static_cast<int32_t>(percent)) / 100));
+
+  g_display.drawRect(x, y, bodyWidth, bodyHeight, SSD1306_WHITE);
+  g_display.fillRect(x + bodyWidth, y + 2, tipWidth, bodyHeight - 4, SSD1306_WHITE);
+
+  if (fillWidth > 0) {
+    g_display.fillRect(x + innerPadding, y + innerPadding, fillWidth, bodyHeight - (innerPadding * 2), SSD1306_WHITE);
   }
 
-  g_display.setTextSize(1);
-  g_display.setCursor(x + 2, y);
-  g_display.print(String(label));
-  g_display.setTextColor(SSD1306_WHITE);
+  if (externalPower) {
+    const int16_t boltX = x + 5;
+    const int16_t boltY = y + 1;
+    g_display.drawLine(boltX + 2, boltY, boltX, boltY + 3, SSD1306_BLACK);
+    g_display.drawLine(boltX, boltY + 3, boltX + 2, boltY + 3, SSD1306_BLACK);
+    g_display.drawLine(boltX + 2, boltY + 3, boltX + 1, boltY + 6, SSD1306_BLACK);
+    g_display.drawLine(boltX + 1, boltY + 6, boltX + 4, boltY + 2, SSD1306_BLACK);
+  }
 }
 
 void OledStatusDisplay::renderScreen(const BootControlStatus &bootStatus,
@@ -539,9 +609,11 @@ void OledStatusDisplay::renderScreen(const BootControlStatus &bootStatus,
   const String footer = menuItemFooter(item);
   const String signature = String(static_cast<int>(item.type)) + "|" + String(item.profileIndex) + "|" +
                            title + "|" + line1 + "|" + line2 + "|" + line3 + "|" + footer + "|" +
-                           batteryLabel(connectivityStatus) + "|" + clockLabel(nowMs, connectivityStatus) + "|" +
-                           String(connectivityStatus.usbConnected) + "|" + String(connectivityStatus.bluetooth.connected) +
-                           "|" + String(connectivityStatus.wifi.connected);
+                           String(connectivityStatus.battery.available) + "|" +
+                           String(connectivityStatus.battery.externalPower) + "|" +
+                           String(connectivityStatus.battery.percent) + "|" +
+                           String(connectivityStatus.usbConnected) + "|" + clockLabel(nowMs, connectivityStatus) + "|" +
+                           String(connectivityStatus.bluetooth.connected) + "|" + String(connectivityStatus.wifi.connected);
   if (signature == lastRenderedSignature_) {
     return;
   }
@@ -624,13 +696,6 @@ String OledStatusDisplay::regionLabel(const LoRaWanRuntimeStatus &lorawanStatus)
   String region = lorawanStatus.region;
   region.trim();
   return region.length() > 0 ? region : "EU868";
-}
-
-String OledStatusDisplay::batteryLabel(const ConnectivityRuntimeStatus &connectivityStatus) const {
-  if (!connectivityStatus.battery.available) {
-    return "BAT --";
-  }
-  return String(connectivityStatus.battery.percent) + "%";
 }
 
 String OledStatusDisplay::clockLabel(unsigned long nowMs, const ConnectivityRuntimeStatus &connectivityStatus) const {

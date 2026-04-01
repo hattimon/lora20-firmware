@@ -313,6 +313,7 @@ void writeConnectivityRuntime(JsonObject target, const lora20::ConnectivityRunti
   target["bridgeWindowSeconds"] = status.bridgeWindowSeconds;
   target["powerSaveLevel"] = status.powerSaveLevel;
   target["utcOffsetMinutes"] = status.utcOffsetMinutes;
+  target["externalPower"] = status.battery.externalPower;
   target["batteryMv"] = status.battery.millivolts;
   target["batteryPercent"] = status.battery.percent;
   target["activityCounter"] = status.activityCounter;

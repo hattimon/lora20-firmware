@@ -36,6 +36,7 @@ struct WifiRuntimeStatus {
 
 struct BatteryRuntimeStatus {
   bool available = true;
+  bool externalPower = false;
   uint16_t millivolts = 0;
   uint8_t percent = 0;
 };

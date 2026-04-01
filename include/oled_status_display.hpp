@@ -79,7 +79,11 @@ class OledStatusDisplay {
   String intervalLabel(uint32_t seconds) const;
   void drawTopBar(const ConnectivityRuntimeStatus &connectivityStatus, unsigned long nowMs);
   void drawConnectionIcons(const ConnectivityRuntimeStatus &connectivityStatus);
-  void drawConnectionGlyph(int16_t x, int16_t y, char label, bool active);
+  void drawUsbIcon(int16_t x, int16_t y, bool active);
+  void drawBleIcon(int16_t x, int16_t y, bool active);
+  void drawWifiIcon(int16_t x, int16_t y, bool active);
+  void drawInactiveSlash(int16_t x, int16_t y, int16_t width, int16_t height);
+  void drawBatteryStatus(const ConnectivityRuntimeStatus &connectivityStatus);
   void renderScreen(const BootControlStatus &bootStatus,
                     const LoRaWanRuntimeStatus &lorawanStatus,
                     const ConnectivityRuntimeStatus &connectivityStatus,
@@ -89,7 +93,6 @@ class OledStatusDisplay {
   String protocolLabel(const String &protocol) const;
   String joinStateLabel(const LoRaWanRuntimeStatus &lorawanStatus) const;
   String regionLabel(const LoRaWanRuntimeStatus &lorawanStatus) const;
-  String batteryLabel(const ConnectivityRuntimeStatus &connectivityStatus) const;
   String clockLabel(unsigned long nowMs, const ConnectivityRuntimeStatus &connectivityStatus) const;
   String menuItemTitle(const MenuItem &item,
                        const DeviceSnapshot &snapshot,
