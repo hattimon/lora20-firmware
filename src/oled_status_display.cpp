@@ -246,7 +246,7 @@ void OledStatusDisplay::renderScreen(const BootControlStatus &bootStatus,
                                      unsigned long nowMs) {
   const String topLeft = batteryLabel(connectivityStatus);
   const String topCenter = connectionLabel(connectivityStatus);
-  const String topRight = clockLabel(nowMs);
+  const String topRight = clockLabel(nowMs, connectivityStatus);
 
   String title;
   String line1;
@@ -263,9 +263,9 @@ void OledStatusDisplay::renderScreen(const BootControlStatus &bootStatus,
   } else if (connectivityStatus.bluetooth.enabled &&
              (connectivityStatus.bluetooth.pairing ||
               (connectivityStatus.activeInterface == "bluetooth" && !connectivityStatus.bluetooth.connected))) {
-    title = "BLE PIN";
-    line1 = String(connectivityStatus.bluetooth.pin);
-    line2 = shortenMiddle(connectivityStatus.bluetooth.deviceName, 20);
+    title = connectivityStatus.bluetooth.connected ? "BLE LINK" : "BLE READY";
+    line1 = shortenMiddle(connectivityStatus.bluetooth.deviceName, 20);
+    line2 = connectivityStatus.bluetooth.connected ? "Connected" : "Pair on phone/PC";
   } else if (connectivityStatus.wifi.connected && connectivityStatus.wifi.ipAddress.length() > 0) {
     title = "WIFI IP";
     line1 = connectivityStatus.wifi.ipAddress;
@@ -374,15 +374,19 @@ String OledStatusDisplay::batteryLabel(const ConnectivityRuntimeStatus &connecti
   return String(connectivityStatus.battery.percent) + "%";
 }
 
-String OledStatusDisplay::clockLabel(unsigned long nowMs) const {
+String OledStatusDisplay::clockLabel(unsigned long nowMs, const ConnectivityRuntimeStatus &connectivityStatus) const {
   time_t current = time(nullptr);
   if (current > 1700000000) {
     struct tm timeInfo {};
-    localtime_r(&current, &timeInfo);
+    current += static_cast<time_t>(connectivityStatus.utcOffsetMinutes) * 60;
+    gmtime_r(&current, &timeInfo);
     return twoDigitNumber(timeInfo.tm_hour) + ":" + twoDigitNumber(timeInfo.tm_min);
   }
 
-  const unsigned long totalMinutes = (nowMs / 60000UL) % (24UL * 60UL);
+  const long offsetMinutes = static_cast<long>(connectivityStatus.utcOffsetMinutes);
+  const long rawMinutes = static_cast<long>(nowMs / 60000UL) + offsetMinutes;
+  const long dayMinutes = 24L * 60L;
+  const long totalMinutes = ((rawMinutes % dayMinutes) + dayMinutes) % dayMinutes;
   const int hours = static_cast<int>(totalMinutes / 60UL);
   const int minutes = static_cast<int>(totalMinutes % 60UL);
   return twoDigitNumber(hours) + ":" + twoDigitNumber(minutes);

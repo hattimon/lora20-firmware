@@ -37,6 +37,7 @@ constexpr const char *kWifiApFallbackKey = "wf_apfb";
 constexpr const char *kDisplaySleepKey = "disp_slp";
 constexpr const char *kBridgeWindowKey = "br_win";
 constexpr const char *kPowerSaveLevelKey = "pw_lvl";
+constexpr const char *kUtcOffsetMinutesKey = "utc_off";
 constexpr const char *kLoRaWanAutoDevEuiKey = "lw_auto";
 constexpr const char *kLoRaWanAdrKey = "lw_adr";
 constexpr const char *kLoRaWanConfirmedKey = "lw_conf";
@@ -393,6 +394,7 @@ bool DeviceStateStore::loadSnapshot(String &error) {
   snapshot_.connectivity.bridgeWindowSeconds = prefs_.getUInt(kBridgeWindowKey, 300);
   const uint32_t rawPowerSaveLevel = prefs_.getUInt(kPowerSaveLevelKey, 1);
   snapshot_.connectivity.powerSaveLevel = rawPowerSaveLevel <= 2 ? static_cast<uint8_t>(rawPowerSaveLevel) : 1;
+  snapshot_.connectivity.utcOffsetMinutes = static_cast<int16_t>(prefs_.getShort(kUtcOffsetMinutesKey, 0));
   snapshot_.loRaWan.autoDevEui = prefs_.getBool(kLoRaWanAutoDevEuiKey, true);
   snapshot_.loRaWan.adr = prefs_.getBool(kLoRaWanAdrKey, true);
   snapshot_.loRaWan.confirmedUplink = prefs_.getBool(kLoRaWanConfirmedKey, false);
@@ -852,6 +854,11 @@ bool DeviceStateStore::persistConnectivityConfig(String &error) {
 
   if (prefs_.putUInt(kPowerSaveLevelKey, snapshot_.connectivity.powerSaveLevel) != sizeof(uint32_t)) {
     error = "Failed to persist powerSaveLevel";
+    return false;
+  }
+
+  if (prefs_.putShort(kUtcOffsetMinutesKey, snapshot_.connectivity.utcOffsetMinutes) != sizeof(int16_t)) {
+    error = "Failed to persist utcOffsetMinutes";
     return false;
   }
 

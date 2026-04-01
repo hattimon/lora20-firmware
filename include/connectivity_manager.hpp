@@ -53,6 +53,7 @@ struct ConnectivityRuntimeStatus {
   uint32_t bridgeWindowSeconds = 300;
   uint32_t activityCounter = 0;
   uint8_t powerSaveLevel = 1;
+  int16_t utcOffsetMinutes = 0;
   String lastError;
 };
 

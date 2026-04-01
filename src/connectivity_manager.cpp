@@ -130,6 +130,14 @@ bool hasValidIpAddress(const IPAddress &address) {
   return address[0] != 0 || address[1] != 0 || address[2] != 0 || address[3] != 0;
 }
 
+void applyRpcCorsHeaders() {
+  g_rpcServer.sendHeader("Access-Control-Allow-Origin", "*");
+  g_rpcServer.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  g_rpcServer.sendHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  g_rpcServer.sendHeader("Access-Control-Allow-Private-Network", "true");
+  g_rpcServer.sendHeader("Cache-Control", "no-store");
+}
+
 void notifyBleText(const String &text) {
   if (g_bleTxCharacteristic == nullptr || !g_bleAuthenticated) {
     return;
@@ -340,6 +348,7 @@ void ConnectivityManager::refreshRuntime() {
   status_.wifi.ssid = String(config().wifiSsid);
   status_.wifi.hostname = resolveWifiHostname();
   status_.tokenSet = String(config().rpcToken).length() > 0;
+  status_.utcOffsetMinutes = config().utcOffsetMinutes;
   status_.wifiConfigured = status_.wifi.configured;
   status_.displaySleepSeconds = config().displaySleepSeconds;
   status_.bridgeWindowSeconds = config().bridgeWindowSeconds;
@@ -523,7 +532,7 @@ void ConnectivityManager::refreshBluetoothState(unsigned long nowMs) {
 
     status_.bluetooth.available = bleStarted_;
     status_.bluetooth.connected = g_bleAuthenticated;
-    status_.bluetooth.pairing = g_blePairing || (g_bleDeviceConnected && !g_bleAuthenticated);
+    status_.bluetooth.pairing = !g_bleAuthenticated && (g_blePairing || g_bleDeviceConnected);
 
     if (status_.bluetooth.connected) {
       status_.bluetooth.state = "connected";
@@ -593,10 +602,15 @@ bool ConnectivityManager::startBluetooth(String &error) {
   BLEDevice::init(name.c_str());
   BLEDevice::setSecurityCallbacks(&g_bleSecurityCallbacks);
   BLEDevice::setMTU(247);
+  BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
 
   BLESecurity security;
   security.setStaticPIN(pin);
+  security.setCapability(ESP_IO_CAP_OUT);
+  security.setKeySize(16);
   security.setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
+  security.setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  security.setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
   g_bleServer = BLEDevice::createServer();
   if (g_bleServer == nullptr) {
@@ -678,11 +692,16 @@ bool ConnectivityManager::startWifi(String &error) {
 
   if (!wifiServerStarted_) {
     if (!g_rpcServerConfigured) {
+      g_rpcServer.on("/rpc", HTTP_OPTIONS, []() {
+        applyRpcCorsHeaders();
+        g_rpcServer.send(204, "text/plain", "");
+      });
       g_rpcServer.on(
           "/rpc",
           HTTP_POST,
           [this]() {
             markActivity();
+            applyRpcCorsHeaders();
 
             if (rpc_ == nullptr) {
               g_rpcServer.send(
@@ -735,6 +754,7 @@ bool ConnectivityManager::startWifi(String &error) {
           });
       g_rpcServer.onNotFound([this]() {
         markActivity();
+        applyRpcCorsHeaders();
         g_rpcServer.send(
             404,
             "application/json",

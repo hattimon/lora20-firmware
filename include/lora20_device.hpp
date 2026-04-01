@@ -56,6 +56,7 @@ struct ConnectivityConfig {
   uint32_t displaySleepSeconds = 60;
   uint32_t bridgeWindowSeconds = 300;
   uint8_t powerSaveLevel = 1;
+  int16_t utcOffsetMinutes = 0;
 
   ConnectivityConfig();
 };

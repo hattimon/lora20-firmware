@@ -263,6 +263,7 @@ void writeSnapshot(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
   connection["displaySleepSeconds"] = snapshot.connectivity.displaySleepSeconds;
   connection["bridgeWindowSeconds"] = snapshot.connectivity.bridgeWindowSeconds;
   connection["powerSaveLevel"] = snapshot.connectivity.powerSaveLevel;
+  connection["utcOffsetMinutes"] = snapshot.connectivity.utcOffsetMinutes;
 
   writeLoRaWanConfig(target.createNestedObject("lorawan"), snapshot.loRaWan);
   target["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
@@ -281,6 +282,7 @@ void writeConnectivityConfig(JsonObject target, const lora20::ConnectivityConfig
   target["displaySleepSeconds"] = config.displaySleepSeconds;
   target["bridgeWindowSeconds"] = config.bridgeWindowSeconds;
   target["powerSaveLevel"] = config.powerSaveLevel;
+  target["utcOffsetMinutes"] = config.utcOffsetMinutes;
 }
 
 void writeConnectivityRuntime(JsonObject target, const lora20::ConnectivityRuntimeStatus &status) {
@@ -309,6 +311,7 @@ void writeConnectivityRuntime(JsonObject target, const lora20::ConnectivityRunti
   target["displaySleepSeconds"] = status.displaySleepSeconds;
   target["bridgeWindowSeconds"] = status.bridgeWindowSeconds;
   target["powerSaveLevel"] = status.powerSaveLevel;
+  target["utcOffsetMinutes"] = status.utcOffsetMinutes;
   target["batteryMv"] = status.battery.millivolts;
   target["batteryPercent"] = status.battery.percent;
   target["activityCounter"] = status.activityCounter;
@@ -782,6 +785,20 @@ bool SerialRpcServer::processRequestLine(const String &line,
         return respondError("invalid_power_save_level", "powerSaveLevel must be 0, 1 or 2");
       }
       next.powerSaveLevel = static_cast<uint8_t>(rawValue);
+    }
+
+    if (!params["utcOffsetMinutes"].isNull()) {
+      int32_t offset = 0;
+      if (!(params["utcOffsetMinutes"].is<int>() ||
+            params["utcOffsetMinutes"].is<long>() ||
+            params["utcOffsetMinutes"].is<short>())) {
+        return respondError("invalid_utc_offset", "utcOffsetMinutes must be an integer between -720 and 840");
+      }
+      offset = params["utcOffsetMinutes"].as<int32_t>();
+      if (offset < -720 || offset > 840) {
+        return respondError("invalid_utc_offset", "utcOffsetMinutes must be between -720 and 840");
+      }
+      next.utcOffsetMinutes = static_cast<int16_t>(offset);
     }
 
     if (params["mode"].is<const char *>()) {

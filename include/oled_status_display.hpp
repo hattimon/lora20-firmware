@@ -39,7 +39,7 @@ class OledStatusDisplay {
   String regionLabel(const LoRaWanRuntimeStatus &lorawanStatus) const;
   String connectionLabel(const ConnectivityRuntimeStatus &connectivityStatus) const;
   String batteryLabel(const ConnectivityRuntimeStatus &connectivityStatus) const;
-  String clockLabel(unsigned long nowMs) const;
+  String clockLabel(unsigned long nowMs, const ConnectivityRuntimeStatus &connectivityStatus) const;
 
   Stream &serial_;
   bool available_ = false;
