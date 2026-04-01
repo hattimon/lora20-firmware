@@ -39,7 +39,7 @@ void pushRecentAutoMintPacket(const lora20::MintProfile &profile, uint32_t nonce
   }
   g_autoMintUiStatus.recentPackets[0] =
       String("MINT ") + lora20::tickToString(profile.tick) + " " + mintAmountToString(profile.amount) +
-      " n " + String(nonce);
+      " n" + String(nonce);
 }
 
 void syncAutoMintUiStatus() {
