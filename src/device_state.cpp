@@ -24,6 +24,19 @@ constexpr const char *kAutoMintIntervalKey = "am_int";
 constexpr const char *kDefaultTickKey = "df_tick";
 constexpr const char *kDefaultAmountKey = "df_amt";
 constexpr const char *kAutoMintProfilesKey = "am_prof";
+constexpr const char *kBtEnabledKey = "bt_en";
+constexpr const char *kBtNameKey = "bt_name";
+constexpr const char *kBtPinKey = "bt_pin";
+constexpr const char *kWifiEnabledKey = "wf_en";
+constexpr const char *kWifiSsidKey = "wf_ssid";
+constexpr const char *kWifiPasswordKey = "wf_pwd";
+constexpr const char *kWifiHostnameKey = "wf_host";
+constexpr const char *kRpcTokenKey = "wf_tok";
+constexpr const char *kWifiReconnectKey = "wf_recon";
+constexpr const char *kWifiApFallbackKey = "wf_apfb";
+constexpr const char *kDisplaySleepKey = "disp_slp";
+constexpr const char *kBridgeWindowKey = "br_win";
+constexpr const char *kPowerSaveLevelKey = "pw_lvl";
 constexpr const char *kLoRaWanAutoDevEuiKey = "lw_auto";
 constexpr const char *kLoRaWanAdrKey = "lw_adr";
 constexpr const char *kLoRaWanConfirmedKey = "lw_conf";
@@ -48,6 +61,30 @@ bool isValidLoRaWanAppPort(uint32_t port) {
 
 bool isValidLoRaWanDataRate(uint32_t dataRate) {
   return dataRate <= 15;
+}
+
+template <size_t N>
+void copyStringSetting(const String &value, char (&target)[N]) {
+  std::memset(target, 0, sizeof(target));
+  value.substring(0, N - 1).toCharArray(target, N);
+}
+
+template <size_t N>
+bool writeFixedString(Preferences &prefs, const char *key, const char (&value)[N], String &error, const char *label) {
+  if (value[0] == '\0') {
+    if (prefs.isKey(key) && !prefs.remove(key)) {
+      error = String("Failed to clear ") + label;
+      return false;
+    }
+    return true;
+  }
+
+  if (prefs.putString(key, String(value)) == 0) {
+    error = String("Failed to persist ") + label;
+    return false;
+  }
+
+  return true;
 }
 
 bool normalizeLoRaWanRegionInput(const String &input, String &normalized) {
@@ -310,6 +347,14 @@ DeviceConfig::DeviceConfig() {
   std::memcpy(defaultTick, "LORA", 5);
 }
 
+ConnectivityConfig::ConnectivityConfig() {
+  bluetoothName[0] = '\0';
+  wifiSsid[0] = '\0';
+  wifiPassword[0] = '\0';
+  wifiHostname[0] = '\0';
+  rpcToken[0] = '\0';
+}
+
 DeviceStateStore::DeviceStateStore() = default;
 
 bool DeviceStateStore::begin(String &error) {
@@ -334,6 +379,20 @@ bool DeviceStateStore::loadSnapshot(String &error) {
 
   snapshot_.config.autoMintEnabled = prefs_.getBool(kAutoMintEnabledKey, false);
   snapshot_.config.autoMintIntervalSeconds = prefs_.getUInt(kAutoMintIntervalKey, 1800);
+  snapshot_.connectivity.bluetoothEnabled = prefs_.getBool(kBtEnabledKey, false);
+  copyStringSetting(prefs_.getString(kBtNameKey, ""), snapshot_.connectivity.bluetoothName);
+  snapshot_.connectivity.bluetoothPin = prefs_.getUInt(kBtPinKey, 0);
+  snapshot_.connectivity.wifiEnabled = prefs_.getBool(kWifiEnabledKey, false);
+  copyStringSetting(prefs_.getString(kWifiSsidKey, ""), snapshot_.connectivity.wifiSsid);
+  copyStringSetting(prefs_.getString(kWifiPasswordKey, ""), snapshot_.connectivity.wifiPassword);
+  copyStringSetting(prefs_.getString(kWifiHostnameKey, ""), snapshot_.connectivity.wifiHostname);
+  copyStringSetting(prefs_.getString(kRpcTokenKey, ""), snapshot_.connectivity.rpcToken);
+  snapshot_.connectivity.wifiReconnect = prefs_.getBool(kWifiReconnectKey, true);
+  snapshot_.connectivity.wifiApFallback = prefs_.getBool(kWifiApFallbackKey, false);
+  snapshot_.connectivity.displaySleepSeconds = prefs_.getUInt(kDisplaySleepKey, 60);
+  snapshot_.connectivity.bridgeWindowSeconds = prefs_.getUInt(kBridgeWindowKey, 300);
+  const uint32_t rawPowerSaveLevel = prefs_.getUInt(kPowerSaveLevelKey, 1);
+  snapshot_.connectivity.powerSaveLevel = rawPowerSaveLevel <= 2 ? static_cast<uint8_t>(rawPowerSaveLevel) : 1;
   snapshot_.loRaWan.autoDevEui = prefs_.getBool(kLoRaWanAutoDevEuiKey, true);
   snapshot_.loRaWan.adr = prefs_.getBool(kLoRaWanAdrKey, true);
   snapshot_.loRaWan.confirmedUplink = prefs_.getBool(kLoRaWanConfirmedKey, false);
@@ -608,6 +667,11 @@ bool DeviceStateStore::updateConfig(const DeviceConfig &config, String &error) {
   return persistConfig(error);
 }
 
+bool DeviceStateStore::updateConnectivityConfig(const ConnectivityConfig &config, String &error) {
+  snapshot_.connectivity = config;
+  return persistConnectivityConfig(error);
+}
+
 bool DeviceStateStore::updateLoRaWanConfig(const LoRaWanConfig &config, String &error) {
   if (!isValidLoRaWanAppPort(config.appPort)) {
     error = "LoRaWAN appPort must be between 1 and 223";
@@ -730,6 +794,70 @@ bool DeviceStateStore::persistConfig(String &error) {
   return true;
 }
 
+bool DeviceStateStore::persistConnectivityConfig(String &error) {
+  if (!prefs_.putBool(kBtEnabledKey, snapshot_.connectivity.bluetoothEnabled)) {
+    error = "Failed to persist bluetoothEnabled";
+    return false;
+  }
+
+  if (!writeFixedString(prefs_, kBtNameKey, snapshot_.connectivity.bluetoothName, error, "bluetoothName")) {
+    return false;
+  }
+
+  if (prefs_.putUInt(kBtPinKey, snapshot_.connectivity.bluetoothPin) != sizeof(uint32_t)) {
+    error = "Failed to persist bluetoothPin";
+    return false;
+  }
+
+  if (!prefs_.putBool(kWifiEnabledKey, snapshot_.connectivity.wifiEnabled)) {
+    error = "Failed to persist wifiEnabled";
+    return false;
+  }
+
+  if (!writeFixedString(prefs_, kWifiSsidKey, snapshot_.connectivity.wifiSsid, error, "wifiSsid")) {
+    return false;
+  }
+
+  if (!writeFixedString(prefs_, kWifiPasswordKey, snapshot_.connectivity.wifiPassword, error, "wifiPassword")) {
+    return false;
+  }
+
+  if (!writeFixedString(prefs_, kWifiHostnameKey, snapshot_.connectivity.wifiHostname, error, "wifiHostname")) {
+    return false;
+  }
+
+  if (!writeFixedString(prefs_, kRpcTokenKey, snapshot_.connectivity.rpcToken, error, "rpcToken")) {
+    return false;
+  }
+
+  if (!prefs_.putBool(kWifiReconnectKey, snapshot_.connectivity.wifiReconnect)) {
+    error = "Failed to persist wifiReconnect";
+    return false;
+  }
+
+  if (!prefs_.putBool(kWifiApFallbackKey, snapshot_.connectivity.wifiApFallback)) {
+    error = "Failed to persist wifiApFallback";
+    return false;
+  }
+
+  if (prefs_.putUInt(kDisplaySleepKey, snapshot_.connectivity.displaySleepSeconds) != sizeof(uint32_t)) {
+    error = "Failed to persist displaySleepSeconds";
+    return false;
+  }
+
+  if (prefs_.putUInt(kBridgeWindowKey, snapshot_.connectivity.bridgeWindowSeconds) != sizeof(uint32_t)) {
+    error = "Failed to persist bridgeWindowSeconds";
+    return false;
+  }
+
+  if (prefs_.putUInt(kPowerSaveLevelKey, snapshot_.connectivity.powerSaveLevel) != sizeof(uint32_t)) {
+    error = "Failed to persist powerSaveLevel";
+    return false;
+  }
+
+  return true;
+}
+
 bool DeviceStateStore::persistLoRaWanConfig(String &error) {
   if (!prefs_.putBool(kLoRaWanAutoDevEuiKey, snapshot_.loRaWan.autoDevEui)) {
     error = "Failed to persist LoRaWAN autoDevEui";
@@ -824,7 +952,7 @@ bool DeviceStateStore::persistNonce(String &error) {
 }
 
 bool DeviceStateStore::persistAll(String &error) {
-  return persistSeed(error) && persistConfig(error) && persistLoRaWanConfig(error) &&
+  return persistSeed(error) && persistConfig(error) && persistConnectivityConfig(error) && persistLoRaWanConfig(error) &&
          persistHeltecLicense(error) && persistNonce(error);
 }
 

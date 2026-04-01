@@ -16,6 +16,10 @@ String u64ToString(uint64_t value) {
   return String(buffer);
 }
 
+bool isAllowedDisplaySleepSeconds(uint32_t value) {
+  return value == 0 || value == 60 || value == 120 || value == 240 || value == 480;
+}
+
 void writeProfiles(JsonArray target, const std::vector<lora20::MintProfile> &profiles) {
   for (const auto &profile : profiles) {
     JsonObject entry = target.createNestedObject();
@@ -27,6 +31,12 @@ void writeProfiles(JsonArray target, const std::vector<lora20::MintProfile> &pro
 
 bool readUint64Param(JsonVariantConst value, uint64_t &out);
 bool readUint32Param(JsonVariantConst value, uint32_t &out);
+
+template <size_t N>
+void copyStringParam(const String &value, char (&target)[N]) {
+  std::memset(target, 0, sizeof(target));
+  value.substring(0, N - 1).toCharArray(target, N);
+}
 
 int hexNibble(char value) {
   if (value >= '0' && value <= '9') return value - '0';
@@ -239,8 +249,70 @@ void writeSnapshot(JsonObject target, const lora20::DeviceSnapshot &snapshot) {
   target["publicKeyHex"] = snapshot.hasKey ? lora20::toHex(snapshot.publicKey) : "";
   target["nextNonce"] = snapshot.nextNonce;
   writeConfig(target.createNestedObject("config"), snapshot.config);
+
+  JsonObject connection = target.createNestedObject("connection");
+  connection["bluetoothEnabled"] = snapshot.connectivity.bluetoothEnabled;
+  connection["bluetoothName"] = snapshot.connectivity.bluetoothName;
+  connection["bluetoothPin"] = snapshot.connectivity.bluetoothPin;
+  connection["wifiEnabled"] = snapshot.connectivity.wifiEnabled;
+  connection["wifiSsid"] = snapshot.connectivity.wifiSsid;
+  connection["wifiHostname"] = snapshot.connectivity.wifiHostname;
+  connection["tokenSet"] = snapshot.connectivity.rpcToken[0] != '\0';
+  connection["wifiReconnect"] = snapshot.connectivity.wifiReconnect;
+  connection["wifiApFallback"] = snapshot.connectivity.wifiApFallback;
+  connection["displaySleepSeconds"] = snapshot.connectivity.displaySleepSeconds;
+  connection["bridgeWindowSeconds"] = snapshot.connectivity.bridgeWindowSeconds;
+  connection["powerSaveLevel"] = snapshot.connectivity.powerSaveLevel;
+
   writeLoRaWanConfig(target.createNestedObject("lorawan"), snapshot.loRaWan);
   target["heltecLicensePresent"] = snapshot.heltecLicense.hasLicense;
+}
+
+void writeConnectivityConfig(JsonObject target, const lora20::ConnectivityConfig &config) {
+  target["bluetoothEnabled"] = config.bluetoothEnabled;
+  target["bluetoothName"] = config.bluetoothName;
+  target["bluetoothPin"] = config.bluetoothPin;
+  target["wifiEnabled"] = config.wifiEnabled;
+  target["wifiSsid"] = config.wifiSsid;
+  target["wifiHostname"] = config.wifiHostname;
+  target["tokenSet"] = config.rpcToken[0] != '\0';
+  target["wifiReconnect"] = config.wifiReconnect;
+  target["wifiApFallback"] = config.wifiApFallback;
+  target["displaySleepSeconds"] = config.displaySleepSeconds;
+  target["bridgeWindowSeconds"] = config.bridgeWindowSeconds;
+  target["powerSaveLevel"] = config.powerSaveLevel;
+}
+
+void writeConnectivityRuntime(JsonObject target, const lora20::ConnectivityRuntimeStatus &status) {
+  target["mode"] = status.activeInterface;
+  target["activeInterface"] = status.activeInterface;
+  target["preferredInterface"] = status.preferredInterface;
+  target["usbConnected"] = status.usbConnected;
+  target["bluetoothEnabled"] = status.bluetooth.enabled;
+  target["bluetoothAvailable"] = status.bluetooth.available;
+  target["bluetoothConnected"] = status.bluetooth.connected;
+  target["bluetoothPairing"] = status.bluetooth.pairing;
+  target["bluetoothPin"] = status.bluetooth.pin;
+  target["bluetoothName"] = status.bluetooth.deviceName;
+  target["bluetoothState"] = status.bluetooth.state;
+  target["wifiEnabled"] = status.wifi.enabled;
+  target["wifiConfigured"] = status.wifi.configured;
+  target["wifiConnected"] = status.wifi.connected;
+  target["wifiState"] = status.wifi.state;
+  target["wifiSsid"] = status.wifi.ssid;
+  target["wifiIp"] = status.wifi.ipAddress;
+  target["wifiHostname"] = status.wifi.hostname;
+  target["wifiMode"] = status.wifi.connected ? "sta_connected" : "sta_idle";
+  target["wifiRssi"] = status.wifi.rssi;
+  target["tokenSet"] = status.tokenSet;
+  target["wifiApFallback"] = status.wifi.apFallback;
+  target["displaySleepSeconds"] = status.displaySleepSeconds;
+  target["bridgeWindowSeconds"] = status.bridgeWindowSeconds;
+  target["powerSaveLevel"] = status.powerSaveLevel;
+  target["batteryMv"] = status.battery.millivolts;
+  target["batteryPercent"] = status.battery.percent;
+  target["activityCounter"] = status.activityCounter;
+  target["lastError"] = status.lastError;
 }
 
 void writeBootStatus(JsonObject target, const lora20::BootControlStatus &status) {
@@ -370,8 +442,16 @@ bool readHexVectorParam(JsonVariantConst value, size_t maxBytes, std::vector<uin
 
 namespace lora20 {
 
-SerialRpcServer::SerialRpcServer(Stream &serial, DeviceStateStore &state, LoRaWanClient &lorawan, BootControl &boot)
-    : serial_(serial), state_(state), lorawan_(lorawan), boot_(boot) {}
+SerialRpcServer::SerialRpcServer(Stream &serial,
+                                 DeviceStateStore &state,
+                                 LoRaWanClient &lorawan,
+                                 BootControl &boot,
+                                 ConnectivityManager &connectivity)
+    : serial_(serial),
+      state_(state),
+      lorawan_(lorawan),
+      boot_(boot),
+      connectivity_(connectivity) {}
 
 void SerialRpcServer::begin() {
   buffer_.reserve(kLineLimit);
@@ -413,6 +493,39 @@ void SerialRpcServer::handleLine(const String &line) {
     return;
   }
 
+  String response;
+  String error;
+  bool rebootRequested = false;
+  if (!processRequestLine(line, response, rebootRequested, error)) {
+    if (error.length() > 0) {
+      DynamicJsonDocument failure(256);
+      failure["ok"] = false;
+      JsonObject err = failure.createNestedObject("error");
+      err["code"] = "rpc_internal_failure";
+      err["message"] = error;
+      serializeJson(failure, response);
+    }
+  }
+
+  if (response.length() > 0) {
+    serial_.println(response);
+  }
+
+  if (rebootRequested) {
+    delay(50);
+    serial_.flush();
+    ESP.restart();
+  }
+}
+
+bool SerialRpcServer::processRequestLine(const String &line,
+                                         String &responseText,
+                                         bool &rebootRequested,
+                                         String &errorText) {
+  responseText = "";
+  rebootRequested = false;
+  errorText = "";
+
   DynamicJsonDocument request(3072);
   const auto parseError = deserializeJson(request, line);
   if (parseError) {
@@ -421,8 +534,8 @@ void SerialRpcServer::handleLine(const String &line) {
     JsonObject error = response.createNestedObject("error");
     error["code"] = "invalid_json";
     error["message"] = parseError.c_str();
-    sendDocument(serial_, response);
-    return;
+    serializeJson(response, responseText);
+    return true;
   }
 
   const char *command = resolveCommand(request);
@@ -430,11 +543,8 @@ void SerialRpcServer::handleLine(const String &line) {
   JsonVariantConst params = request["params"];
 
   DynamicJsonDocument response(kResponseCapacity);
-  if (requestId[0] != '\0') {
-    response["id"] = requestId;
-  }
 
-  auto sendError = [&](const char *code, const String &message) {
+  auto respondError = [&](const char *code, const String &message) -> bool {
     response.clear();
     if (requestId[0] != '\0') {
       response["id"] = requestId;
@@ -443,10 +553,11 @@ void SerialRpcServer::handleLine(const String &line) {
     JsonObject error = response.createNestedObject("error");
     error["code"] = code;
     error["message"] = message;
-    sendDocument(serial_, response);
+    serializeJson(response, responseText);
+    return true;
   };
 
-  auto sendSuccess = [&](const std::function<void(JsonObject)> &fillResult) {
+  auto respondSuccess = [&](const std::function<void(JsonObject)> &fillResult) -> bool {
     response.clear();
     if (requestId[0] != '\0') {
       response["id"] = requestId;
@@ -454,25 +565,24 @@ void SerialRpcServer::handleLine(const String &line) {
     response["ok"] = true;
     JsonObject result = response.createNestedObject("result");
     fillResult(result);
-    sendDocument(serial_, response);
+    serializeJson(response, responseText);
+    return true;
   };
 
   if (strlen(command) == 0) {
-    sendError("missing_command", "Request must contain command or method");
-    return;
+    return respondError("missing_command", "Request must contain command or method");
   }
 
   if (strcmp(command, "ping") == 0) {
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       result["firmware"] = kFirmwareName;
       result["version"] = LORA20_FW_VERSION;
       result["uptimeMs"] = millis();
     });
-    return;
   }
 
   if (strcmp(command, "get_info") == 0) {
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       result["firmware"] = kFirmwareName;
       result["version"] = LORA20_FW_VERSION;
       result["chipModel"] = ESP.getChipModel();
@@ -482,68 +592,64 @@ void SerialRpcServer::handleLine(const String &line) {
       result["uptimeMs"] = millis();
       writeSnapshot(result.createNestedObject("device"), state_.snapshot());
       writeLoRaWanStatus(result.createNestedObject("lorawanRuntime"), lorawan_.status());
+      writeConnectivityRuntime(result.createNestedObject("connectivity"), connectivity_.status());
       writeBootStatus(result.createNestedObject("boot"), boot_.status());
     });
-    return;
   }
 
   if (strcmp(command, "get_boot_control") == 0 || strcmp(command, "get_boot") == 0) {
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeBootStatus(result, boot_.status());
     });
-    return;
   }
 
   if (strcmp(command, "set_boot_target") == 0) {
     if (!params["protocol"].is<const char *>()) {
-      sendError("missing_protocol", "set_boot_target requires params.protocol");
-      return;
+      return respondError("missing_protocol", "set_boot_target requires params.protocol");
     }
 
     const bool reboot = params["reboot"].is<bool>() ? params["reboot"].as<bool>() : true;
     const String protocol = String(params["protocol"].as<const char *>());
     String error;
     if (!boot_.switchToProtocol(protocol, false, error)) {
-      sendError("boot_switch_failed", error);
-      return;
+      return respondError("boot_switch_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    rebootRequested = reboot;
+    return respondSuccess([&](JsonObject result) {
       result["protocol"] = protocol;
       result["rebootPending"] = reboot;
       result["message"] = reboot ? "Boot target updated; rebooting now" : "Boot target updated";
       writeBootStatus(result.createNestedObject("boot"), boot_.status());
     });
-
-    if (reboot) {
-      delay(50);
-      serial_.flush();
-      ESP.restart();
-    }
-    return;
   }
 
   if (strcmp(command, "get_lorawan") == 0) {
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeLoRaWanConfig(result.createNestedObject("config"), state_.snapshot().loRaWan);
       writeLoRaWanStatus(result.createNestedObject("runtime"), lorawan_.status());
       writeHeltecLicense(result.createNestedObject("heltec"), state_.snapshot().heltecLicense, lorawan_.status());
     });
-    return;
   }
 
   if (strcmp(command, "get_heltec_license") == 0) {
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeHeltecLicense(result, state_.snapshot().heltecLicense, lorawan_.status());
     });
-    return;
   }
 
   if (strcmp(command, "get_config") == 0) {
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeConfig(result, state_.snapshot().config);
     });
-    return;
+  }
+
+  if (strcmp(command, "get_connectivity") == 0) {
+    return respondSuccess([&](JsonObject result) {
+      writeConnectivityConfig(result.createNestedObject("config"), state_.snapshot().connectivity);
+      writeConnectivityRuntime(result.createNestedObject("runtime"), connectivity_.status());
+      writeConnectivityRuntime(result, connectivity_.status());
+    });
   }
 
   if (strcmp(command, "set_config") == 0) {
@@ -556,22 +662,19 @@ void SerialRpcServer::handleLine(const String &line) {
 
     if (!params["autoMintIntervalSeconds"].isNull()) {
       if (!readUint32Param(params["autoMintIntervalSeconds"], next.autoMintIntervalSeconds)) {
-        sendError("invalid_auto_mint_interval", "autoMintIntervalSeconds must be a positive integer");
-        return;
+        return respondError("invalid_auto_mint_interval", "autoMintIntervalSeconds must be a positive integer");
       }
     }
 
     if (params["defaultTick"].is<const char *>()) {
       if (!normalizeTick(String(params["defaultTick"].as<const char *>()), next.defaultTick, error)) {
-        sendError("invalid_tick", error);
-        return;
+        return respondError("invalid_tick", error);
       }
     }
 
     if (!params["defaultMintAmount"].isNull()) {
       if (!readUint64Param(params["defaultMintAmount"], next.defaultMintAmount) || next.defaultMintAmount == 0) {
-        sendError("invalid_default_mint_amount", "defaultMintAmount must be a positive integer");
-        return;
+        return respondError("invalid_default_mint_amount", "defaultMintAmount must be a positive integer");
       }
     }
 
@@ -580,8 +683,7 @@ void SerialRpcServer::handleLine(const String &line) {
       profilesParam = params["mintProfiles"];
     }
     if (!readMintProfilesParam(profilesParam, next.mintProfiles, error)) {
-      sendError("invalid_profiles", error);
-      return;
+      return respondError("invalid_profiles", error);
     }
 
     if (!next.mintProfiles.empty()) {
@@ -600,19 +702,104 @@ void SerialRpcServer::handleLine(const String &line) {
     }
 
     if (next.autoMintEnabled && next.autoMintIntervalSeconds == 0) {
-      sendError("invalid_auto_mint_interval", "autoMintIntervalSeconds must be > 0 when autoMintEnabled=true");
-      return;
+      return respondError("invalid_auto_mint_interval", "autoMintIntervalSeconds must be > 0 when autoMintEnabled=true");
     }
 
     if (!state_.updateConfig(next, error)) {
-      sendError("config_persist_failed", error);
-      return;
+      return respondError("config_persist_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeConfig(result, state_.snapshot().config);
     });
-    return;
+  }
+
+  if (strcmp(command, "set_connectivity") == 0) {
+    ConnectivityConfig next = state_.snapshot().connectivity;
+    String error;
+
+    if (params["bluetoothEnabled"].is<bool>()) {
+      next.bluetoothEnabled = params["bluetoothEnabled"].as<bool>();
+    }
+
+    if (params["bluetoothName"].is<const char *>()) {
+      copyStringParam(String(params["bluetoothName"].as<const char *>()), next.bluetoothName);
+    }
+
+    uint32_t rawValue = 0;
+    if (!params["bluetoothPin"].isNull()) {
+      if (!readUint32Param(params["bluetoothPin"], rawValue) || rawValue < 100000UL || rawValue > 999999UL) {
+        return respondError("invalid_bluetooth_pin", "bluetoothPin must be a 6-digit PIN");
+      }
+      next.bluetoothPin = rawValue;
+    }
+
+    if (params["wifiEnabled"].is<bool>()) {
+      next.wifiEnabled = params["wifiEnabled"].as<bool>();
+    }
+
+    if (params["wifiSsid"].is<const char *>()) {
+      copyStringParam(String(params["wifiSsid"].as<const char *>()), next.wifiSsid);
+    }
+
+    if (params["wifiPassword"].is<const char *>()) {
+      copyStringParam(String(params["wifiPassword"].as<const char *>()), next.wifiPassword);
+    }
+
+    if (params["wifiHostname"].is<const char *>()) {
+      copyStringParam(String(params["wifiHostname"].as<const char *>()), next.wifiHostname);
+    }
+
+    if (params["rpcToken"].is<const char *>()) {
+      copyStringParam(String(params["rpcToken"].as<const char *>()), next.rpcToken);
+    }
+
+    if (params["wifiReconnect"].is<bool>()) {
+      next.wifiReconnect = params["wifiReconnect"].as<bool>();
+    }
+
+    if (params["wifiApFallback"].is<bool>()) {
+      next.wifiApFallback = params["wifiApFallback"].as<bool>();
+    }
+
+    if (!params["displaySleepSeconds"].isNull()) {
+      if (!readUint32Param(params["displaySleepSeconds"], rawValue) ||
+          !isAllowedDisplaySleepSeconds(rawValue)) {
+        return respondError("invalid_display_sleep", "displaySleepSeconds must be one of: 0, 60, 120, 240, 480");
+      }
+      next.displaySleepSeconds = rawValue;
+    }
+
+    if (!params["bridgeWindowSeconds"].isNull()) {
+      if (!readUint32Param(params["bridgeWindowSeconds"], rawValue) || rawValue < 30 || rawValue > 3600) {
+        return respondError("invalid_bridge_window", "bridgeWindowSeconds must be between 30 and 3600");
+      }
+      next.bridgeWindowSeconds = rawValue;
+    }
+
+    if (!params["powerSaveLevel"].isNull()) {
+      if (!readUint32Param(params["powerSaveLevel"], rawValue) || rawValue > 2) {
+        return respondError("invalid_power_save_level", "powerSaveLevel must be 0, 1 or 2");
+      }
+      next.powerSaveLevel = static_cast<uint8_t>(rawValue);
+    }
+
+    if (params["mode"].is<const char *>()) {
+      const String mode = String(params["mode"].as<const char *>());
+      if (!(mode == "usb" || mode == "bluetooth" || mode == "ble" || mode == "wifi" || mode == "auto")) {
+        return respondError("invalid_mode", "mode must be usb, bluetooth, ble, wifi or auto");
+      }
+    }
+
+    if (!connectivity_.updateConfig(next, error)) {
+      return respondError("connectivity_persist_failed", error);
+    }
+
+    return respondSuccess([&](JsonObject result) {
+      writeConnectivityConfig(result.createNestedObject("config"), state_.snapshot().connectivity);
+      writeConnectivityRuntime(result.createNestedObject("runtime"), connectivity_.status());
+      writeConnectivityRuntime(result, connectivity_.status());
+    });
   }
 
   if (strcmp(command, "set_lorawan") == 0) {
@@ -634,16 +821,14 @@ void SerialRpcServer::handleLine(const String &line) {
     uint32_t rawValue = 0;
     if (!params["appPort"].isNull()) {
       if (!readUint32Param(params["appPort"], rawValue) || rawValue == 0 || rawValue > 223) {
-        sendError("invalid_app_port", "appPort must be between 1 and 223");
-        return;
+        return respondError("invalid_app_port", "appPort must be between 1 and 223");
       }
       next.appPort = static_cast<uint8_t>(rawValue);
     }
 
     if (!params["defaultDataRate"].isNull()) {
       if (!readUint32Param(params["defaultDataRate"], rawValue) || rawValue > 15) {
-        sendError("invalid_default_data_rate", "defaultDataRate must be between 0 and 15");
-        return;
+        return respondError("invalid_default_data_rate", "defaultDataRate must be between 0 and 15");
       }
       next.defaultDataRate = static_cast<uint8_t>(rawValue);
     }
@@ -654,47 +839,40 @@ void SerialRpcServer::handleLine(const String &line) {
 
     if (!params["devEuiHex"].isNull() &&
         !readHexArrayParam(params["devEuiHex"], next.devEui, next.hasDevEui)) {
-      sendError("invalid_dev_eui", "devEuiHex must be 16 hex characters");
-      return;
+      return respondError("invalid_dev_eui", "devEuiHex must be 16 hex characters");
     }
 
     if (!params["joinEuiHex"].isNull() &&
         !readHexArrayParam(params["joinEuiHex"], next.joinEui, next.hasJoinEui)) {
-      sendError("invalid_join_eui", "joinEuiHex must be 16 hex characters");
-      return;
+      return respondError("invalid_join_eui", "joinEuiHex must be 16 hex characters");
     }
 
     if (!params["appKeyHex"].isNull() &&
         !readHexArrayParam(params["appKeyHex"], next.appKey, next.hasAppKey)) {
-      sendError("invalid_app_key", "appKeyHex must be 32 hex characters");
-      return;
+      return respondError("invalid_app_key", "appKeyHex must be 32 hex characters");
     }
 
     if (!state_.updateLoRaWanConfig(next, error)) {
-      sendError("lorawan_config_persist_failed", error);
-      return;
+      return respondError("lorawan_config_persist_failed", error);
     }
 
     lorawan_.reset();
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeLoRaWanConfig(result.createNestedObject("config"), state_.snapshot().loRaWan);
       writeLoRaWanStatus(result.createNestedObject("runtime"), lorawan_.status());
     });
-    return;
   }
 
   if (strcmp(command, "set_heltec_license") == 0) {
     if (!params["licenseHex"].is<const char *>()) {
-      sendError("missing_license", "set_heltec_license requires params.licenseHex");
-      return;
+      return respondError("missing_license", "set_heltec_license requires params.licenseHex");
     }
 
     HeltecLicenseConfig next = state_.snapshot().heltecLicense;
     String licenseHex;
     if (!normalizeHeltecLicenseInput(String(params["licenseHex"].as<const char *>()), licenseHex)) {
-      sendError("invalid_license", "licenseHex must be 32 hex characters or Heltec license= / 0x...,0x...,0x...,0x... format");
-      return;
+      return respondError("invalid_license", "licenseHex must be 32 hex characters or Heltec license= / 0x...,0x...,0x...,0x... format");
     }
 
     if (licenseHex.length() == 0) {
@@ -702,68 +880,58 @@ void SerialRpcServer::handleLine(const String &line) {
       next.value.fill(0);
     } else {
       if (!hexToBytes(licenseHex, next.value.data(), next.value.size())) {
-        sendError("invalid_license", "licenseHex must be 32 hex characters or Heltec license= / 0x...,0x...,0x...,0x... format");
-        return;
+        return respondError("invalid_license", "licenseHex must be 32 hex characters or Heltec license= / 0x...,0x...,0x...,0x... format");
       }
       next.hasLicense = true;
     }
 
     String error;
     if (!state_.updateHeltecLicense(next, error)) {
-      sendError("heltec_license_persist_failed", error);
-      return;
+      return respondError("heltec_license_persist_failed", error);
     }
 
     lorawan_.reset();
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeHeltecLicense(result, state_.snapshot().heltecLicense, lorawan_.status());
     });
-    return;
   }
 
   if (strcmp(command, "generate_key") == 0) {
     const bool force = params["force"] | false;
     String error;
-
     if (!state_.generateKey(force, error)) {
-      sendError("generate_key_failed", error);
-      return;
+      return respondError("generate_key_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeSnapshot(result.createNestedObject("device"), state_.snapshot());
     });
-    return;
   }
 
   if (strcmp(command, "get_public_key") == 0) {
     if (!state_.snapshot().hasKey) {
-      sendError("missing_key", "Device key has not been generated yet");
-      return;
+      return respondError("missing_key", "Device key has not been generated yet");
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       result["deviceId"] = toHex(state_.snapshot().deviceId);
       result["publicKeyHex"] = toHex(state_.snapshot().publicKey);
     });
-    return;
   }
 
   if (strcmp(command, "export_backup") == 0) {
     if (!params["passphrase"].is<const char *>()) {
-      sendError("missing_passphrase", "export_backup requires params.passphrase");
-      return;
+      return respondError("missing_passphrase", "export_backup requires params.passphrase");
     }
 
     BackupBlob backup;
     String error;
     if (!state_.exportBackup(String(params["passphrase"].as<const char *>()), backup, error)) {
-      sendError("backup_export_failed", error);
-      return;
+      return respondError("backup_export_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       result["version"] = backup.version;
       result["algorithm"] = backup.algorithm;
       result["saltHex"] = backup.saltHex;
@@ -772,19 +940,16 @@ void SerialRpcServer::handleLine(const String &line) {
       result["tagHex"] = backup.tagHex;
       result["deviceId"] = backup.deviceId;
     });
-    return;
   }
 
   if (strcmp(command, "import_backup") == 0) {
     if (!params["passphrase"].is<const char *>()) {
-      sendError("missing_passphrase", "import_backup requires params.passphrase");
-      return;
+      return respondError("missing_passphrase", "import_backup requires params.passphrase");
     }
 
     JsonObjectConst backupObject = params["backup"].as<JsonObjectConst>();
     if (backupObject.isNull()) {
-      sendError("missing_backup", "import_backup requires params.backup");
-      return;
+      return respondError("missing_backup", "import_backup requires params.backup");
     }
 
     BackupBlob backup;
@@ -798,42 +963,39 @@ void SerialRpcServer::handleLine(const String &line) {
     backup.deviceId = backupObject["deviceId"].is<const char *>() ? backupObject["deviceId"].as<const char *>() : "";
 
     String error;
-    if (!state_.importBackup(backup, String(params["passphrase"].as<const char *>()), params["overwrite"] | false, error)) {
-      sendError("backup_import_failed", error);
-      return;
+    if (!state_.importBackup(backup,
+                             String(params["passphrase"].as<const char *>()),
+                             params["overwrite"] | false,
+                             error)) {
+      return respondError("backup_import_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeSnapshot(result.createNestedObject("device"), state_.snapshot());
     });
-    return;
   }
 
   if (strcmp(command, "join_lorawan") == 0) {
     String error;
     if (!lorawan_.requestJoin(error)) {
-      sendError("lorawan_join_failed", error);
-      return;
+      return respondError("lorawan_join_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writeLoRaWanStatus(result, lorawan_.status());
     });
-    return;
   }
 
   if (strcmp(command, "lorawan_send") == 0) {
     if (!params["payloadHex"].is<const char *>()) {
-      sendError("missing_payload", "lorawan_send requires params.payloadHex");
-      return;
+      return respondError("missing_payload", "lorawan_send requires params.payloadHex");
     }
 
     uint8_t port = state_.snapshot().loRaWan.appPort;
     if (!params["port"].isNull()) {
       uint32_t rawPort = 0;
       if (!readUint32Param(params["port"], rawPort) || rawPort == 0 || rawPort > 223) {
-        sendError("invalid_port", "port must be between 1 and 223");
-        return;
+        return respondError("invalid_port", "port must be between 1 and 223");
       }
       port = static_cast<uint8_t>(rawPort);
     }
@@ -842,9 +1004,10 @@ void SerialRpcServer::handleLine(const String &line) {
         params["confirmed"].is<bool>() ? params["confirmed"].as<bool>() : state_.snapshot().loRaWan.confirmedUplink;
     const bool commitNonce = params["commitNonce"] | false;
     uint32_t nonceToCommit = state_.snapshot().nextNonce;
-    if (commitNonce && !params["nonceToCommit"].isNull() && !readUint32Param(params["nonceToCommit"], nonceToCommit)) {
-      sendError("invalid_nonce", "nonceToCommit must be a positive integer");
-      return;
+    if (commitNonce &&
+        !params["nonceToCommit"].isNull() &&
+        !readUint32Param(params["nonceToCommit"], nonceToCommit)) {
+      return respondError("invalid_nonce", "nonceToCommit must be a positive integer");
     }
 
     String error;
@@ -855,11 +1018,10 @@ void SerialRpcServer::handleLine(const String &line) {
             commitNonce,
             nonceToCommit,
             error)) {
-      sendError("lorawan_send_failed", error);
-      return;
+      return respondError("lorawan_send_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       result["queued"] = true;
       result["port"] = port;
       result["confirmed"] = confirmed;
@@ -868,7 +1030,6 @@ void SerialRpcServer::handleLine(const String &line) {
       result["nextNonce"] = state_.snapshot().nextNonce;
       writeLoRaWanStatus(result.createNestedObject("runtime"), lorawan_.status());
     });
-    return;
   }
 
   if (strcmp(command, "prepare_deploy") == 0) {
@@ -877,8 +1038,7 @@ void SerialRpcServer::handleLine(const String &line) {
     String error;
     if (params["tick"].is<const char *>()) {
       if (!normalizeTick(String(params["tick"].as<const char *>()), tick, error)) {
-        sendError("invalid_tick", error);
-        return;
+        return respondError("invalid_tick", error);
       }
     } else {
       memcpy(tick, current.defaultTick, 5);
@@ -886,29 +1046,26 @@ void SerialRpcServer::handleLine(const String &line) {
 
     uint64_t maxSupply = 0;
     uint64_t limitPerMint = 0;
-    if (!readUint64Param(params["maxSupply"], maxSupply) || !readUint64Param(params["limitPerMint"], limitPerMint)) {
-      sendError("invalid_supply", "prepare_deploy requires maxSupply and limitPerMint");
-      return;
+    if (!readUint64Param(params["maxSupply"], maxSupply) ||
+        !readUint64Param(params["limitPerMint"], limitPerMint)) {
+      return respondError("invalid_supply", "prepare_deploy requires maxSupply and limitPerMint");
     }
 
     PreparedPayload prepared;
     const uint32_t nonce = state_.snapshot().nextNonce;
     if (!buildDeployPayload(state_.snapshot(), tick, maxSupply, limitPerMint, nonce, prepared, error)) {
-      sendError("prepare_deploy_failed", error);
-      return;
+      return respondError("prepare_deploy_failed", error);
     }
 
     prepared.committed = params["commit"] | false;
     if (prepared.committed && !state_.commitNonce(nonce, error)) {
-      sendError("commit_failed", error);
-      return;
+      return respondError("commit_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writePreparedPayload(result, prepared);
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
-    return;
   }
 
   if (strcmp(command, "prepare_mint") == 0) {
@@ -917,8 +1074,7 @@ void SerialRpcServer::handleLine(const String &line) {
     String error;
     if (params["tick"].is<const char *>()) {
       if (!normalizeTick(String(params["tick"].as<const char *>()), tick, error)) {
-        sendError("invalid_tick", error);
-        return;
+        return respondError("invalid_tick", error);
       }
     } else {
       memcpy(tick, current.defaultTick, 5);
@@ -926,28 +1082,24 @@ void SerialRpcServer::handleLine(const String &line) {
 
     uint64_t amount = current.defaultMintAmount;
     if (!params["amount"].isNull() && !readUint64Param(params["amount"], amount)) {
-      sendError("invalid_amount", "amount must be a positive integer");
-      return;
+      return respondError("invalid_amount", "amount must be a positive integer");
     }
 
     PreparedPayload prepared;
     const uint32_t nonce = state_.snapshot().nextNonce;
     if (!buildMintPayload(state_.snapshot(), tick, amount, nonce, prepared, error)) {
-      sendError("prepare_mint_failed", error);
-      return;
+      return respondError("prepare_mint_failed", error);
     }
 
     prepared.committed = params["commit"] | false;
     if (prepared.committed && !state_.commitNonce(nonce, error)) {
-      sendError("commit_failed", error);
-      return;
+      return respondError("commit_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writePreparedPayload(result, prepared);
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
-    return;
   }
 
   if (strcmp(command, "prepare_transfer") == 0) {
@@ -956,8 +1108,7 @@ void SerialRpcServer::handleLine(const String &line) {
     String error;
     if (params["tick"].is<const char *>()) {
       if (!normalizeTick(String(params["tick"].as<const char *>()), tick, error)) {
-        sendError("invalid_tick", error);
-        return;
+        return respondError("invalid_tick", error);
       }
     } else {
       memcpy(tick, current.defaultTick, 5);
@@ -965,88 +1116,77 @@ void SerialRpcServer::handleLine(const String &line) {
 
     uint64_t amount = 0;
     if (!readUint64Param(params["amount"], amount)) {
-      sendError("invalid_amount", "prepare_transfer requires amount");
-      return;
+      return respondError("invalid_amount", "prepare_transfer requires amount");
     }
 
     if (!params["toDeviceId"].is<const char *>()) {
-      sendError("missing_recipient", "prepare_transfer requires toDeviceId");
-      return;
+      return respondError("missing_recipient", "prepare_transfer requires toDeviceId");
     }
 
     PreparedPayload prepared;
     const uint32_t nonce = state_.snapshot().nextNonce;
-    if (!buildTransferPayload(
-            state_.snapshot(),
-            tick,
-            amount,
-            String(params["toDeviceId"].as<const char *>()),
-            nonce,
-            prepared,
-            error)) {
-      sendError("prepare_transfer_failed", error);
-      return;
+    if (!buildTransferPayload(state_.snapshot(),
+                              tick,
+                              amount,
+                              String(params["toDeviceId"].as<const char *>()),
+                              nonce,
+                              prepared,
+                              error)) {
+      return respondError("prepare_transfer_failed", error);
     }
 
     prepared.committed = params["commit"] | false;
     if (prepared.committed && !state_.commitNonce(nonce, error)) {
-      sendError("commit_failed", error);
-      return;
+      return respondError("commit_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writePreparedPayload(result, prepared);
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
-    return;
   }
 
   if (strcmp(command, "prepare_message") == 0) {
     if (!params["toDeviceId"].is<const char *>()) {
-      sendError("missing_recipient", "prepare_message requires toDeviceId");
-      return;
+      return respondError("missing_recipient", "prepare_message requires toDeviceId");
     }
 
     uint32_t rawMessageLength = 0;
-    if (!readUint32Param(params["messageLength"], rawMessageLength) || rawMessageLength == 0 || rawMessageLength > 32) {
-      sendError("invalid_message_length", "messageLength must be between 1 and 32");
-      return;
+    if (!readUint32Param(params["messageLength"], rawMessageLength) ||
+        rawMessageLength == 0 ||
+        rawMessageLength > 32) {
+      return respondError("invalid_message_length", "messageLength must be between 1 and 32");
     }
 
     std::vector<uint8_t> packedMessage;
     String error;
     if (!readHexVectorParam(params["messageHex"], 24, packedMessage, error)) {
-      sendError("invalid_message_hex", error);
-      return;
+      return respondError("invalid_message_hex", error);
     }
 
     PreparedPayload prepared;
     const uint32_t nonce = state_.snapshot().nextNonce;
-    if (!buildMessagePayload(
-            state_.snapshot(),
-            String(params["toDeviceId"].as<const char *>()),
-            static_cast<uint8_t>(rawMessageLength),
-            packedMessage,
-            nonce,
-            prepared,
-            error)) {
-      sendError("prepare_message_failed", error);
-      return;
+    if (!buildMessagePayload(state_.snapshot(),
+                             String(params["toDeviceId"].as<const char *>()),
+                             static_cast<uint8_t>(rawMessageLength),
+                             packedMessage,
+                             nonce,
+                             prepared,
+                             error)) {
+      return respondError("prepare_message_failed", error);
     }
 
     prepared.committed = params["commit"] | false;
     if (prepared.committed && !state_.commitNonce(nonce, error)) {
-      sendError("commit_failed", error);
-      return;
+      return respondError("commit_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writePreparedPayload(result, prepared);
       result["messageLength"] = rawMessageLength;
       result["packedSize"] = packedMessage.size();
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
-    return;
   }
 
   if (strcmp(command, "prepare_config") == 0) {
@@ -1059,37 +1199,33 @@ void SerialRpcServer::handleLine(const String &line) {
 
     if (!params["autoMintIntervalSeconds"].isNull()) {
       if (!readUint32Param(params["autoMintIntervalSeconds"], next.autoMintIntervalSeconds)) {
-        sendError("invalid_auto_mint_interval", "autoMintIntervalSeconds must be a positive integer");
-        return;
+        return respondError("invalid_auto_mint_interval", "autoMintIntervalSeconds must be a positive integer");
       }
     }
 
     PreparedPayload prepared;
     const uint32_t nonce = state_.snapshot().nextNonce;
     if (!buildConfigPayload(state_.snapshot(), next, nonce, prepared, error)) {
-      sendError("prepare_config_failed", error);
-      return;
+      return respondError("prepare_config_failed", error);
     }
 
     prepared.committed = params["commit"] | false;
     if (prepared.committed && !state_.applyCommittedConfig(next, nonce, error)) {
-      sendError("commit_failed", error);
-      return;
+      return respondError("commit_failed", error);
     }
 
-    sendSuccess([&](JsonObject result) {
+    return respondSuccess([&](JsonObject result) {
       writePreparedPayload(result, prepared);
       writeConfig(result.createNestedObject("deviceConfig"), state_.snapshot().config);
       result["nextNonce"] = state_.snapshot().nextNonce;
     });
-    return;
   }
 
-  sendError("unknown_command", String("Unknown command: ") + command);
+  return respondError("unknown_command", String("Unknown command: ") + command);
 }
 
 void SerialRpcServer::sendBootEvent() {
-  DynamicJsonDocument boot(2048);
+  DynamicJsonDocument boot(2304);
   boot["type"] = "boot";
   boot["firmware"] = kFirmwareName;
   boot["version"] = LORA20_FW_VERSION;
@@ -1097,8 +1233,8 @@ void SerialRpcServer::sendBootEvent() {
   boot["deviceId"] = state_.snapshot().hasKey ? toHex(state_.snapshot().deviceId) : "";
   boot["nextNonce"] = state_.snapshot().nextNonce;
   boot["lorawanConfigured"] = lorawan_.status().configured;
-  JsonObject runtime = boot.createNestedObject("lorawanRuntime");
-  writeLoRaWanStatus(runtime, lorawan_.status());
+  writeLoRaWanStatus(boot.createNestedObject("lorawanRuntime"), lorawan_.status());
+  writeConnectivityRuntime(boot.createNestedObject("connectivity"), connectivity_.status());
   writeBootStatus(boot.createNestedObject("bootControl"), boot_.status());
   sendDocument(serial_, boot);
 }

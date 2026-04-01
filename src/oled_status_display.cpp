@@ -5,14 +5,14 @@
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
 #include <Wire.h>
+#include <time.h>
 
 namespace {
 
 constexpr uint8_t kDisplayAddress = LORA20_OLED_I2C_ADDR;
-constexpr uint8_t kDisplayAddresses[] = {0x3C, 0x3D};
 constexpr uint16_t kDisplayWidth = 128;
 constexpr uint16_t kDisplayHeight = 64;
-constexpr unsigned long kRestoreIdleScreenAfterMs = 2500UL;
+constexpr int kPrgButtonPin = 0;
 
 Adafruit_SSD1306 g_display(kDisplayWidth, kDisplayHeight, &Wire, RST_OLED);
 
@@ -49,20 +49,112 @@ bool probeAddress(uint8_t address) {
   return Wire.endTransmission() == 0;
 }
 
-String scanDisplayCandidates() {
-  String found;
-  for (const uint8_t address : kDisplayAddresses) {
-    if (probeAddress(address)) {
-      if (found.length() > 0) {
-        found += ",";
-      }
-      found += String("0x") + String(address, HEX);
-    }
-  }
-  return found.length() > 0 ? found : "none";
+String formatProtocolLabel(const String &protocol) {
+  String normalized = protocol;
+  normalized.trim();
+  normalized.toLowerCase();
+  if (normalized == "meshcore") return "MeshCore";
+  if (normalized == "meshtastic") return "Meshtastic";
+  return "LoRa20";
 }
 
-void applyContrastProfile() {
+String twoDigitNumber(int value) {
+  if (value < 10) {
+    return String("0") + String(value);
+  }
+  return String(value);
+}
+
+void drawCenteredLine(int16_t y, const String &text, uint8_t size) {
+  int16_t x1 = 0;
+  int16_t y1 = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+
+  g_display.setTextSize(size);
+  g_display.getTextBounds(text, 0, y, &x1, &y1, &width, &height);
+  const int16_t x = static_cast<int16_t>((kDisplayWidth - width) / 2);
+  g_display.setCursor(x < 0 ? 0 : x, y);
+  g_display.print(text);
+}
+
+String shortenMiddle(const String &text, size_t maxLength) {
+  if (text.length() <= maxLength) {
+    return text;
+  }
+  const size_t left = (maxLength / 2) - 1;
+  const size_t right = maxLength - left - 3;
+  return text.substring(0, left) + "..." + text.substring(text.length() - right);
+}
+
+}  // namespace
+
+namespace lora20 {
+
+OledStatusDisplay::OledStatusDisplay(Stream &serial) : serial_(serial) {}
+
+bool OledStatusDisplay::begin(const BootControlStatus &bootStatus,
+                              const LoRaWanRuntimeStatus &lorawanStatus,
+                              const ConnectivityRuntimeStatus &connectivityStatus,
+                              String &error) {
+  error = "";
+
+  powerCycleDisplayRail();
+  resetDisplayPanel();
+
+  Wire.begin(SDA_OLED, SCL_OLED);
+  Wire.setClock(LORA20_OLED_I2C_FREQ);
+
+  if (!g_display.begin(SSD1306_SWITCHCAPVCC, kDisplayAddress, true, false)) {
+    error = "OLED begin failed";
+    return false;
+  }
+
+  if (!probeAddress(kDisplayAddress)) {
+    error = String("OLED not detected at 0x") + String(kDisplayAddress, HEX);
+    return false;
+  }
+
+  pinMode(kPrgButtonPin, INPUT_PULLUP);
+  applyBrightnessProfile();
+  available_ = true;
+  lastActivityMs_ = millis();
+  lastSeenConnectivityActivity_ = connectivityStatus.activityCounter;
+
+#if defined(LORA20_OLED_SELF_TEST)
+  selfTest();
+#endif
+
+  renderScreen(bootStatus, lorawanStatus, connectivityStatus, millis());
+  return true;
+}
+
+void OledStatusDisplay::poll(const BootControlStatus &bootStatus,
+                             const LoRaWanRuntimeStatus &lorawanStatus,
+                             const ConnectivityRuntimeStatus &connectivityStatus) {
+  if (!available_) {
+    return;
+  }
+
+  const unsigned long nowMs = millis();
+  trackWakeButton(nowMs);
+  trackLoRaActivity(lorawanStatus, nowMs);
+  trackConnectivityActivity(connectivityStatus, nowMs);
+
+  const uint32_t sleepSeconds = connectivityStatus.displaySleepSeconds;
+  if (sleepSeconds != 0 && !sleeping_ && (nowMs - lastActivityMs_) >= (sleepSeconds * 1000UL)) {
+    sleepDisplay();
+    return;
+  }
+
+  if (sleeping_) {
+    return;
+  }
+
+  renderScreen(bootStatus, lorawanStatus, connectivityStatus, nowMs);
+}
+
+void OledStatusDisplay::applyBrightnessProfile() {
   g_display.dim(false);
   g_display.ssd1306_command(SSD1306_DISPLAYALLON_RESUME);
   g_display.ssd1306_command(SSD1306_NORMALDISPLAY);
@@ -74,136 +166,38 @@ void applyContrastProfile() {
   g_display.ssd1306_command(0x40);
 }
 
-String formatProtocolLabel(const String &protocol) {
-  String normalized = protocol;
-  normalized.trim();
-  normalized.toLowerCase();
-
-  if (normalized == "meshcore") {
-    return "MeshCore";
+void OledStatusDisplay::sleepDisplay() {
+  if (sleeping_ || !available_) {
+    return;
   }
-  if (normalized == "meshtastic") {
-    return "Meshtastic";
-  }
-  return "LoRa20";
+  g_display.ssd1306_command(SSD1306_DISPLAYOFF);
+  sleeping_ = true;
+  lastRenderedSignature_ = "";
 }
 
-void drawCenteredLine(int16_t y, const String &text, uint8_t size) {
-  int16_t x1 = 0;
-  int16_t y1 = 0;
-  uint16_t w = 0;
-  uint16_t h = 0;
-
-  g_display.setTextSize(size);
-  g_display.getTextBounds(text, 0, y, &x1, &y1, &w, &h);
-  const int16_t x = static_cast<int16_t>((kDisplayWidth - w) / 2);
-  g_display.setCursor(x < 0 ? 0 : x, y);
-  g_display.print(text);
-}
-
-}  // namespace
-
-namespace lora20 {
-
-OledStatusDisplay::OledStatusDisplay(Stream &serial) : serial_(serial) {}
-
-bool OledStatusDisplay::begin(const BootControlStatus &bootStatus,
-                              const LoRaWanRuntimeStatus &lorawanStatus,
-                              String &error) {
-  error = "";
-
-  powerCycleDisplayRail();
-  resetDisplayPanel();
-
-  Wire.begin(SDA_OLED, SCL_OLED);
-  Wire.setClock(LORA20_OLED_I2C_FREQ);
-
-  const String scanResult = scanDisplayCandidates();
-  serial_.printf("[display] i2c scan=%s configured=0x%02x freq=%lu\r\n",
-                 scanResult.c_str(),
-                 kDisplayAddress,
-                 static_cast<unsigned long>(LORA20_OLED_I2C_FREQ));
-
-  if (!g_display.begin(SSD1306_SWITCHCAPVCC, kDisplayAddress, true, false)) {
-    error = "OLED begin failed";
-    return false;
-  }
-
-  if (!probeAddress(kDisplayAddress)) {
-    error = String("OLED not detected at 0x") + String(kDisplayAddress, HEX) +
-            " scan=" + scanResult;
-    return false;
-  }
-
-  applyBrightnessProfile();
-  available_ = true;
-
-#if defined(LORA20_OLED_SELF_TEST)
-  selfTest();
-#endif
-
-  renderIdleScreen(bootStatus, lorawanStatus);
-  serial_.printf("[display] init ok addr=0x%02x\r\n", kDisplayAddress);
-  return true;
-}
-
-void OledStatusDisplay::poll(const BootControlStatus &bootStatus,
-                             const LoRaWanRuntimeStatus &lorawanStatus) {
+void OledStatusDisplay::wakeDisplay() {
   if (!available_) {
     return;
   }
-
-  const unsigned long nowMs = millis();
-  trackLoRaActivity(lorawanStatus, nowMs);
-  const String nextProtocol = protocolLabel(bootStatus.currentProtocol);
-  const String nextRegion = regionLabel(lorawanStatus);
-  const String nextJoinState = joinStateLabel(lorawanStatus);
-
-  const bool screenContentChanged =
-      idleScreenVisible_ &&
-      (nextProtocol != lastRenderedProtocol_ || nextRegion != lastRenderedRegion_ ||
-       nextJoinState != lastRenderedJoinState_);
-
-  if (screenContentChanged) {
-    renderIdleScreen(bootStatus, lorawanStatus);
-    return;
-  }
-
-  if (idleScreenVisible_) {
-    return;
-  }
-
-  if ((nowMs - lastLoRaActivityMs_) < kRestoreIdleScreenAfterMs) {
-    return;
-  }
-
-  renderIdleScreen(bootStatus, lorawanStatus);
-}
-
-void OledStatusDisplay::applyBrightnessProfile() {
-  applyContrastProfile();
-}
-
-void OledStatusDisplay::selfTest() {
-  if (!available_) {
-    return;
-  }
-
+  g_display.ssd1306_command(SSD1306_DISPLAYON);
   applyBrightnessProfile();
-  g_display.clearDisplay();
-  g_display.fillRect(0, 0, kDisplayWidth, kDisplayHeight, SSD1306_WHITE);
-  g_display.display();
-  delay(700);
+  sleeping_ = false;
+  lastRenderedSignature_ = "";
+}
 
-  g_display.clearDisplay();
-  g_display.setTextColor(SSD1306_WHITE);
-  g_display.drawRect(0, 0, kDisplayWidth, kDisplayHeight, SSD1306_WHITE);
-  g_display.drawRect(2, 2, kDisplayWidth - 4, kDisplayHeight - 4, SSD1306_WHITE);
-  drawCenteredLine(8, "OLED SELF TEST", 1);
-  drawCenteredLine(24, "FULL WHITE", 1);
-  drawCenteredLine(40, String("ADDR 0x") + String(kDisplayAddress, HEX), 1);
-  g_display.display();
-  delay(1400);
+void OledStatusDisplay::recordActivity(unsigned long nowMs) {
+  lastActivityMs_ = nowMs;
+  if (sleeping_) {
+    wakeDisplay();
+  }
+}
+
+void OledStatusDisplay::trackWakeButton(unsigned long nowMs) {
+  const bool pressed = digitalRead(kPrgButtonPin) == LOW;
+  if (pressed && !lastPrgPressed_) {
+    recordActivity(nowMs);
+  }
+  lastPrgPressed_ = pressed;
 }
 
 void OledStatusDisplay::trackLoRaActivity(const LoRaWanRuntimeStatus &lorawanStatus, unsigned long nowMs) {
@@ -232,41 +226,123 @@ void OledStatusDisplay::trackLoRaActivity(const LoRaWanRuntimeStatus &lorawanSta
     }
   }
 
-  if (!sawActivity) {
-    return;
+  if (sawActivity) {
+    lastLoRaActivityMs_ = nowMs;
+    recordActivity(nowMs);
   }
-
-  lastLoRaActivityMs_ = nowMs;
-  idleScreenVisible_ = false;
 }
 
-void OledStatusDisplay::renderIdleScreen(const BootControlStatus &bootStatus,
-                                         const LoRaWanRuntimeStatus &lorawanStatus) {
-  if (!probeAddress(kDisplayAddress)) {
-    available_ = false;
-    return;
+void OledStatusDisplay::trackConnectivityActivity(const ConnectivityRuntimeStatus &connectivityStatus,
+                                                  unsigned long nowMs) {
+  if (connectivityStatus.activityCounter != lastSeenConnectivityActivity_) {
+    lastSeenConnectivityActivity_ = connectivityStatus.activityCounter;
+    recordActivity(nowMs);
+  }
+}
+
+void OledStatusDisplay::renderScreen(const BootControlStatus &bootStatus,
+                                     const LoRaWanRuntimeStatus &lorawanStatus,
+                                     const ConnectivityRuntimeStatus &connectivityStatus,
+                                     unsigned long nowMs) {
+  const String topLeft = batteryLabel(connectivityStatus);
+  const String topCenter = connectionLabel(connectivityStatus);
+  const String topRight = clockLabel(nowMs);
+
+  String title;
+  String line1;
+  String line2;
+
+  if (lorawanStatus.lastError.length() > 0) {
+    title = "RADIO ERROR";
+    line1 = shortenMiddle(lorawanStatus.lastError, 28);
+    line2 = regionLabel(lorawanStatus);
+  } else if (connectivityStatus.lastError.length() > 0) {
+    title = "LINK ERROR";
+    line1 = shortenMiddle(connectivityStatus.lastError, 28);
+    line2 = connectionLabel(connectivityStatus);
+  } else if (connectivityStatus.bluetooth.enabled &&
+             (connectivityStatus.bluetooth.pairing ||
+              (connectivityStatus.activeInterface == "bluetooth" && !connectivityStatus.bluetooth.connected))) {
+    title = "BLE PIN";
+    line1 = String(connectivityStatus.bluetooth.pin);
+    line2 = shortenMiddle(connectivityStatus.bluetooth.deviceName, 20);
+  } else if (connectivityStatus.wifi.connected && connectivityStatus.wifi.ipAddress.length() > 0) {
+    title = "WIFI IP";
+    line1 = connectivityStatus.wifi.ipAddress;
+    line2 = shortenMiddle(connectivityStatus.wifi.hostname, 24);
+  } else {
+    title = protocolLabel(bootStatus.currentProtocol);
+    line1 = String("FW ") + LORA20_FW_VERSION;
+    line2 = joinStateLabel(lorawanStatus) + " · " + regionLabel(lorawanStatus);
   }
 
-  const String currentProtocol = protocolLabel(bootStatus.currentProtocol);
-  const String firmwareVersion = String("FW ") + LORA20_FW_VERSION;
-  const String region = regionLabel(lorawanStatus);
-  const String joinState = joinStateLabel(lorawanStatus);
+  const String signature = topLeft + "|" + topCenter + "|" + topRight + "|" + title + "|" + line1 + "|" + line2;
+  if (signature == lastRenderedSignature_) {
+    return;
+  }
 
   applyBrightnessProfile();
   g_display.clearDisplay();
   g_display.setTextColor(SSD1306_WHITE);
 
-  drawCenteredLine(6, currentProtocol, 2);
-  drawCenteredLine(30, firmwareVersion, 1);
-  drawCenteredLine(42, region, 1);
-  drawCenteredLine(54, joinState, 1);
+  g_display.setTextSize(1);
+  g_display.setCursor(0, 0);
+  g_display.print(topLeft);
+  drawCenteredLine(0, topCenter, 1);
+  int16_t x1 = 0;
+  int16_t y1 = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+  g_display.getTextBounds(topRight, 0, 0, &x1, &y1, &width, &height);
+  g_display.setCursor(kDisplayWidth - width, 0);
+  g_display.print(topRight);
+  g_display.drawFastHLine(0, 10, kDisplayWidth, SSD1306_WHITE);
+
+  drawCenteredLine(16, title, 2);
+  drawCenteredLine(38, line1, 1);
+  drawWrappedLine(0, 50, kDisplayWidth, line2);
 
   g_display.display();
+  lastRenderedSignature_ = signature;
+}
 
-  idleScreenVisible_ = true;
-  lastRenderedProtocol_ = currentProtocol;
-  lastRenderedRegion_ = region;
-  lastRenderedJoinState_ = joinState;
+void OledStatusDisplay::drawWrappedLine(int16_t x, int16_t y, int16_t maxWidth, const String &text) {
+  String remaining = text;
+  remaining.trim();
+  if (remaining.length() == 0) {
+    return;
+  }
+
+  String currentLine;
+  while (remaining.length() > 0) {
+    int splitIndex = remaining.indexOf(' ');
+    String token = splitIndex >= 0 ? remaining.substring(0, splitIndex) : remaining;
+    String rest = splitIndex >= 0 ? remaining.substring(splitIndex + 1) : "";
+    String candidate = currentLine.length() > 0 ? currentLine + " " + token : token;
+
+    int16_t x1 = 0;
+    int16_t y1 = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    g_display.getTextBounds(candidate, x, y, &x1, &y1, &width, &height);
+    if (width > maxWidth && currentLine.length() > 0) {
+      drawCenteredLine(y, currentLine, 1);
+      y += 10;
+      currentLine = token;
+      remaining = rest;
+    } else {
+      currentLine = candidate;
+      remaining = rest;
+    }
+
+    if (splitIndex < 0) {
+      break;
+    }
+  }
+
+  if (currentLine.length() > 0 && y <= (kDisplayHeight - 8)) {
+    drawCenteredLine(y, currentLine, 1);
+  }
 }
 
 String OledStatusDisplay::protocolLabel(const String &protocol) const {
@@ -280,10 +356,58 @@ String OledStatusDisplay::joinStateLabel(const LoRaWanRuntimeStatus &lorawanStat
 String OledStatusDisplay::regionLabel(const LoRaWanRuntimeStatus &lorawanStatus) const {
   String region = lorawanStatus.region;
   region.trim();
-  if (region.length() == 0) {
-    return "EU868";
+  return region.length() > 0 ? region : "EU868";
+}
+
+String OledStatusDisplay::connectionLabel(const ConnectivityRuntimeStatus &connectivityStatus) const {
+  const String mode = connectivityStatus.activeInterface;
+  if (mode == "wifi") return "WIFI";
+  if (mode == "bluetooth") return "BLE";
+  if (mode == "usb") return "USB";
+  return "NONE";
+}
+
+String OledStatusDisplay::batteryLabel(const ConnectivityRuntimeStatus &connectivityStatus) const {
+  if (!connectivityStatus.battery.available) {
+    return "BAT --";
   }
-  return region;
+  return String(connectivityStatus.battery.percent) + "%";
+}
+
+String OledStatusDisplay::clockLabel(unsigned long nowMs) const {
+  time_t current = time(nullptr);
+  if (current > 1700000000) {
+    struct tm timeInfo {};
+    localtime_r(&current, &timeInfo);
+    return twoDigitNumber(timeInfo.tm_hour) + ":" + twoDigitNumber(timeInfo.tm_min);
+  }
+
+  const unsigned long totalMinutes = (nowMs / 60000UL) % (24UL * 60UL);
+  const int hours = static_cast<int>(totalMinutes / 60UL);
+  const int minutes = static_cast<int>(totalMinutes % 60UL);
+  return twoDigitNumber(hours) + ":" + twoDigitNumber(minutes);
+}
+
+void OledStatusDisplay::selfTest() {
+  if (!available_) {
+    return;
+  }
+
+  applyBrightnessProfile();
+  g_display.clearDisplay();
+  g_display.fillRect(0, 0, kDisplayWidth, kDisplayHeight, SSD1306_WHITE);
+  g_display.display();
+  delay(700);
+
+  g_display.clearDisplay();
+  g_display.setTextColor(SSD1306_WHITE);
+  g_display.drawRect(0, 0, kDisplayWidth, kDisplayHeight, SSD1306_WHITE);
+  g_display.drawRect(2, 2, kDisplayWidth - 4, kDisplayHeight - 4, SSD1306_WHITE);
+  drawCenteredLine(8, "OLED SELF TEST", 1);
+  drawCenteredLine(24, "FULL WHITE", 1);
+  drawCenteredLine(40, String("ADDR 0x") + String(kDisplayAddress, HEX), 1);
+  g_display.display();
+  delay(1200);
 }
 
 }  // namespace lora20

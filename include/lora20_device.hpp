@@ -18,6 +18,11 @@ constexpr uint8_t kOpTransfer = 0x03;
 constexpr uint8_t kOpMessage = 0x04;
 constexpr uint8_t kOpConfig = 0x10;
 constexpr size_t kMaxMintProfiles = 8;
+constexpr size_t kMaxBluetoothNameLength = 31;
+constexpr size_t kMaxWifiSsidLength = 32;
+constexpr size_t kMaxWifiPasswordLength = 63;
+constexpr size_t kMaxHostnameLength = 32;
+constexpr size_t kMaxRpcTokenLength = 64;
 
 struct MintProfile {
   char tick[5];
@@ -35,6 +40,24 @@ struct DeviceConfig {
   std::vector<MintProfile> mintProfiles;
 
   DeviceConfig();
+};
+
+struct ConnectivityConfig {
+  bool bluetoothEnabled = false;
+  char bluetoothName[kMaxBluetoothNameLength + 1]{};
+  uint32_t bluetoothPin = 0;
+  bool wifiEnabled = false;
+  char wifiSsid[kMaxWifiSsidLength + 1]{};
+  char wifiPassword[kMaxWifiPasswordLength + 1]{};
+  char wifiHostname[kMaxHostnameLength + 1]{};
+  char rpcToken[kMaxRpcTokenLength + 1]{};
+  bool wifiReconnect = true;
+  bool wifiApFallback = false;
+  uint32_t displaySleepSeconds = 60;
+  uint32_t bridgeWindowSeconds = 300;
+  uint8_t powerSaveLevel = 1;
+
+  ConnectivityConfig();
 };
 
 struct BackupBlob {
@@ -75,6 +98,7 @@ struct DeviceSnapshot {
   std::array<uint8_t, 8> deviceId{};
   uint32_t nextNonce = 1;
   DeviceConfig config;
+  ConnectivityConfig connectivity;
   LoRaWanConfig loRaWan;
   HeltecLicenseConfig heltecLicense;
 };
@@ -99,6 +123,7 @@ class DeviceStateStore {
   bool importBackup(const BackupBlob &backup, const String &passphrase, bool overwrite, String &error);
 
   bool updateConfig(const DeviceConfig &config, String &error);
+  bool updateConnectivityConfig(const ConnectivityConfig &config, String &error);
   bool updateLoRaWanConfig(const LoRaWanConfig &config, String &error);
   bool updateHeltecLicense(const HeltecLicenseConfig &config, String &error);
   bool commitNonce(uint32_t usedNonce, String &error);
@@ -108,6 +133,7 @@ class DeviceStateStore {
   bool loadSnapshot(String &error);
   bool persistSeed(String &error);
   bool persistConfig(String &error);
+  bool persistConnectivityConfig(String &error);
   bool persistLoRaWanConfig(String &error);
   bool persistHeltecLicense(String &error);
   bool persistNonce(String &error);
