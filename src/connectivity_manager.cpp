@@ -130,6 +130,25 @@ bool hasValidIpAddress(const IPAddress &address) {
   return address[0] != 0 || address[1] != 0 || address[2] != 0 || address[3] != 0;
 }
 
+bool extractAuthTokenFromJsonPayload(const String &payload, String &providedToken, String &parseErrorText) {
+  providedToken = "";
+  parseErrorText = "";
+
+  StaticJsonDocument<32> filter;
+  filter["auth"] = true;
+  DynamicJsonDocument authDoc(128);
+  const auto parseError = deserializeJson(authDoc, payload, DeserializationOption::Filter(filter));
+  if (parseError) {
+    parseErrorText = parseError.c_str();
+    return false;
+  }
+
+  if (authDoc["auth"].is<const char *>()) {
+    providedToken = String(authDoc["auth"].as<const char *>());
+  }
+  return true;
+}
+
 void applyRpcCorsHeaders() {
   g_rpcServer.sendHeader("Access-Control-Allow-Origin", "*");
   g_rpcServer.sendHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -712,19 +731,24 @@ bool ConnectivityManager::startWifi(String &error) {
             }
 
             const String payload = g_rpcServer.arg("plain");
-            DynamicJsonDocument authDoc(256);
-            const auto parseError = deserializeJson(authDoc, payload);
-            if (parseError) {
+            String providedToken;
+            String authParseError;
+            if (!extractAuthTokenFromJsonPayload(payload, providedToken, authParseError)) {
+              StaticJsonDocument<256> failure;
+              failure["ok"] = false;
+              JsonObject err = failure.createNestedObject("error");
+              err["code"] = "invalid_json";
+              err["message"] = authParseError.length() > 0 ? authParseError : "Invalid JSON payload";
+              String failureText;
+              serializeJson(failure, failureText);
               g_rpcServer.send(
                   400,
                   "application/json",
-                  "{\"ok\":false,\"error\":{\"code\":\"invalid_json\",\"message\":\"Invalid JSON payload\"}}");
+                  failureText);
               return;
             }
 
             const String expectedToken = String(config().rpcToken);
-            const String providedToken =
-                authDoc["auth"].is<const char *>() ? String(authDoc["auth"].as<const char *>()) : "";
             if (expectedToken.length() > 0 && providedToken != expectedToken) {
               g_rpcServer.send(
                   401,

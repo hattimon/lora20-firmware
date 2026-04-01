@@ -8,6 +8,7 @@
 namespace {
 
 constexpr size_t kLineLimit = 3072;
+constexpr size_t kRequestCapacity = 6144;
 constexpr size_t kResponseCapacity = 6144;
 
 String u64ToString(uint64_t value) {
@@ -529,7 +530,7 @@ bool SerialRpcServer::processRequestLine(const String &line,
   rebootRequested = false;
   errorText = "";
 
-  DynamicJsonDocument request(3072);
+  DynamicJsonDocument request(kRequestCapacity);
   const auto parseError = deserializeJson(request, line);
   if (parseError) {
     DynamicJsonDocument response(256);
